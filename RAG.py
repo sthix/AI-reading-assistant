@@ -4,9 +4,9 @@ from typing import Literal
 import dotenv
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
+from langchain_chroma import Chroma
 from langchain_community.document_loaders import CSVLoader
 from langchain_core.messages import HumanMessage
-from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -34,10 +34,22 @@ doc_splits = text_splitter.split_documents(docs_list)
 # 2. Create a retriever tool
 # ---------------------------------------------------------------------------
 
-vectorstore = InMemoryVectorStore.from_documents(
-    documents=doc_splits,
-    embedding=OllamaEmbeddings(model="embeddinggemma"),
-)
+embedding_model = OllamaEmbeddings(model="embeddinggemma")
+
+persist_directory = os.path.join(os.path.dirname(__file__), "chroma_db")
+
+if os.path.exists(persist_directory) and os.listdir(persist_directory):
+    vectorstore = Chroma(
+        persist_directory=persist_directory,
+        embedding_function=embedding_model,
+    )
+else:
+    vectorstore = Chroma.from_documents(
+        documents=doc_splits,
+        embedding=embedding_model,
+        persist_directory=persist_directory,
+    )
+
 retriever = vectorstore.as_retriever()
 
 
@@ -49,6 +61,7 @@ def retrieve_jlpt_info(query: str) -> str:
 
 
 retriever_tool = retrieve_jlpt_info
+
 
 # ---------------------------------------------------------------------------
 # 3. Generate query — LLM decides whether to retrieve or respond directly
