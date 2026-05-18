@@ -219,3 +219,7 @@ __marimo__/
 
 # Local vector stores
 chroma_db/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
