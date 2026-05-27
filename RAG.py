@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Literal
 
 import dotenv
@@ -18,9 +19,9 @@ dotenv.load_dotenv()
 # 1. Preprocess documents — load language data
 # ---------------------------------------------------------------------------
 
-document_paths = [
-    os.path.join(os.path.dirname(__file__), "documents", "jlpt_vocab.csv")
-]
+documents_dir = Path(__file__).parent / "documents"
+
+document_paths = list(documents_dir.glob("*.csv"))
 
 docs = [CSVLoader(path).load() for path in document_paths]
 docs_list = [item for sublist in docs for item in sublist]
