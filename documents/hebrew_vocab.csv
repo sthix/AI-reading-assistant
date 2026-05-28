@@ -1,0 +1,82 @@
+word,transliteration,meaning,part_of_speech,root,binyan,cefr_level
+שלום,shalom,hello / peace,noun,ש-ל-ם,,A1
+כן,ken,yes,particle,,,A1
+לא,lo,no / not,particle,,,A1
+אני,ani,I,pronoun,,,A1
+אתה,atah,you (m.sg),pronoun,,,A1
+את,at,you (f.sg),pronoun,,,A1
+מה,mah,what,pronoun,,,A1
+מי,mi,who,pronoun,,,A1
+בית,bayit,house,noun,ב-י-ת,,A1
+ילד,yeled,child / boy,noun,י-ל-ד,,A1
+ילדה,yaldah,girl,noun,י-ל-ד,,A1
+אמא,ima,mother / mom,noun,,,A1
+אבא,aba,father / dad,noun,,,A1
+מים,mayim,water,noun,מ-י-ם,,A1
+לחם,lechem,bread,noun,ל-ח-ם,,A1
+ספר,sefer,book,noun,ס-פ-ר,,A1
+כלב,kelev,dog,noun,כ-ל-ב,,A1
+חתול,chatul,cat,noun,ח-ת-ל,,A1
+יום,yom,day,noun,י-ו-ם,,A1
+לילה,laylah,night,noun,ל-י-ל,,A1
+טוב,tov,good,adjective,ט-ו-ב,,A1
+גדול,gadol,big / large,adjective,ג-ד-ל,,A1
+קטן,katan,small,adjective,ק-ט-ן,,A1
+לאכול,le'echol,to eat,verb,א-כ-ל,Pa'al,A1
+לשתות,lishtot,to drink,verb,ש-ת-ה,Pa'al,A1
+ללכת,lalechet,to go / to walk,verb,ה-ל-כ,Pa'al,A1
+לבוא,lavo,to come,verb,ב-ו-א,Pa'al,A1
+לדבר,ledaber,to speak,verb,ד-ב-ר,Pi'el,A1
+לקרוא,likro,to read / to call,verb,ק-ר-א,Pa'al,A1
+חבר,chaver,friend (m.),noun,ח-ב-ר,,A2
+משפחה,mishpachah,family,noun,מ-ש-פ-ח,,A2
+עבודה,avodah,work / job,noun,ע-ב-ד,,A2
+חדר,cheder,room,noun,ח-ד-ר,,A2
+רחוב,rechov,street,noun,ר-ח-ב,,A2
+מסעדה,mis'adah,restaurant,noun,ס-ע-ד,,A2
+שמח,sameach,happy,adjective,ש-מ-ח,,A2
+עצוב,atzuv,sad,adjective,ע-צ-ב,,A2
+לכתוב,lichtov,to write,verb,כ-ת-ב,Pa'al,A2
+ללמוד,lilmod,to study / to learn,verb,ל-מ-ד,Pa'al,A2
+לעבוד,la'avod,to work,verb,ע-ב-ד,Pa'al,A2
+לראות,lir'ot,to see,verb,ר-א-ה,Pa'al,A2
+לשמוע,lishmoa,to hear / to listen,verb,ש-מ-ע,Pa'al,A2
+לחשוב,lachshov,to think,verb,ח-ש-ב,Pa'al,A2
+לטייל,letayel,to travel / to stroll,verb,ט-י-ל,Pi'el,A2
+ממשלה,memshalah,government,noun,מ-ש-ל,,B1
+חברה,chevrah,society / company,noun,ח-ב-ר,,B1
+מדינה,medinah,country / state,noun,ד-י-נ,,B1
+תרבות,tarbut,culture,noun,ר-ב-ה,,B1
+חינוך,chinuch,education,noun,ח-נ-כ,,B1
+בעיה,be'ayah,problem,noun,ב-ע-ה,,B1
+להחליט,lehachlit,to decide,verb,ח-ל-ט,Hif'il,B1
+להסביר,lehasbir,to explain,verb,ס-ב-ר,Hif'il,B1
+להתחיל,lehatchil,to start / to begin,verb,ת-ח-ל,Hif'il,B1
+להמשיך,lehamshich,to continue,verb,מ-ש-כ,Hif'il,B1
+להתלבש,lehitlabesh,to get dressed,verb,ל-ב-ש,Hitpa'el,B1
+להיפגש,lehipagesh,to meet (one another),verb,פ-ג-ש,Nif'al,B1
+כלכלה,kalkalah,economy,noun,כ-ל-כ-ל,,B2
+מחקר,mechkar,research,noun,ח-ק-ר,,B2
+התפתחות,hitpatchut,development,noun,פ-ת-ח,,B2
+השפעה,hashpa'ah,influence / impact,noun,ש-פ-ע,,B2
+מסקנה,maskanah,conclusion,noun,נ-ס-ק,,B2
+להתפתח,lehitpate'ach,to develop,verb,פ-ת-ח,Hitpa'el,B2
+להשפיע,lehashpia,to influence,verb,ש-פ-ע,Hif'il,B2
+להוכיח,lehochi'ach,to prove,verb,י-כ-ח,Hif'il,B2
+להציע,lehatzi'a,to suggest / to offer,verb,י-צ-ע,Hif'il,B2
+להעריך,leha'arich,to appreciate / to estimate,verb,ע-ר-כ,Hif'il,B2
+להידרש,lehidaresh,to be required,verb,ד-ר-ש,Nif'al,B2
+מציאות,metzi'ut,reality,noun,מ-צ-א,,C1
+תפיסה,tfisah,perception / conception,noun,ת-פ-ס,,C1
+משמעות,mashma'ut,meaning / significance,noun,ש-מ-ע,,C1
+הכרה,hakarah,recognition / consciousness,noun,נ-כ-ר,,C1
+להתייחס,lehityaches,to relate to / to refer to,verb,י-ח-ס,Hitpa'el,C1
+להתבסס,lehitbasses,to be based on,verb,ב-ס-ס,Hitpa'el,C1
+להפיק,lehafik,to produce / to derive,verb,פ-ו-ק,Hif'il,C1
+לבולל,levolel,to mix / to blend in,verb,ב-ל-ל,Pu'al (passive: lebolal),C1
+ייצוג,yitzug,representation,noun,י-צ-ג,,C2
+מובהקות,muvhakut,distinctness / significance,noun,ב-ה-ק,,C2
+להמחיש,lehamchish,to illustrate / to demonstrate,verb,מ-ח-ש,Hif'il,C2
+להפנים,lehafnim,to internalize,verb,פ-נ-מ,Hif'il,C2
+להתנער,lehitna'er,to shake off (fig.),verb,נ-ע-ר,Hitpa'el,C2
+להתחקות,lehitchakot,to trace / to investigate,verb,ח-ק-ה,Hitpa'el,C2
