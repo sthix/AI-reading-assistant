@@ -146,23 +146,53 @@ def get_jlpt_vocab() -> dict[str, dict[str, int | str]]:
     def is_kana_key(key: str) -> bool:
         return bool(re.fullmatch(r"[\u3040-\u30ffー]+", key))
 
-    def keep_easiest_kana_entry(key: str, entry: dict[str, int | str]) -> None:
-        """Prefer the most common/easiest JLPT match for ambiguous kana readings."""
-        current_entry = kana_candidates.get(key)
-        if current_entry is None or int(entry["level"]) > int(current_entry["level"]):
-            kana_candidates[key] = entry
+    def keep_easiest_entry(
+        target: dict[str, dict[str, int | str]],
+        key: str,
+        entry: dict[str, int | str],
+    ) -> None:
+        """Keep the easiest (and, on ties, shortest-reading) entry for a key.
+
+        Many headwords are homographs with several CSV rows (私 → あたし/N1,
+        わたし/N5; 今日 → こんにち/N3, きょう/N5). The previous code kept whichever
+        row came first in the file for kanji keys, which surfaced rare/formal
+        readings at the wrong JLPT level. Preferring the highest level number
+        (= easiest JLPT) picks the common everyday word, and the shortest-reading
+        tiebreak favours the basic reading (わたし over わたくし, にほん over にっぽん)
+        instead of an arbitrary file-order choice.
+        """
+        current_entry = target.get(key)
+        if current_entry is None:
+            target[key] = entry
+            return
+        current_level = int(current_entry["level"])
+        if level > current_level:
+            target[key] = entry
+        elif level == current_level and len(str(entry["reading"])) < len(
+            str(current_entry["reading"])
+        ):
+            target[key] = entry
 
     with vocab_path.open(encoding="utf-8", newline="") as file:
         for row in csv.DictReader(file):
             level = int(row["Level"])
-            entry = {"level": level, "reading": row["Reading"]}
+            surface = row["Kanji"]
+            reading = row["Reading"]
+            entry = {"level": level, "reading": reading}
 
-            if is_kana_key(row["Kanji"]):
-                keep_easiest_kana_entry(row["Kanji"], entry)
+            if is_kana_key(surface):
+                keep_easiest_entry(kana_candidates, surface, entry)
             else:
-                vocab.setdefault(row["Kanji"], entry)
+                # The CSV stores する-verbs with a する-suffixed reading
+                # (勉強 → べんきょうする). For a bare kanji surface that does not
+                # itself end in する, drop the suffix so the displayed reading
+                # matches the surface (勉強 → べんきょう) instead of trailing する.
+                surface_entry = entry
+                if reading.endswith("する") and not surface.endswith("する"):
+                    surface_entry = {"level": level, "reading": reading[:-2]}
+                keep_easiest_entry(vocab, surface, surface_entry)
 
-            keep_easiest_kana_entry(row["Reading"], entry)
+            keep_easiest_entry(kana_candidates, reading, entry)
 
     vocab.update(kana_candidates)
     return vocab
