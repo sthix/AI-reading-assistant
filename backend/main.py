@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import os
 import re
 import urllib.request
 import zipfile
@@ -10,9 +11,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import nagisa
+from langchain.chat_models import init_chat_model
+from sudachipy import dictionary as sudachi_dictionary
+from sudachipy import tokenizer as sudachi_tokenizer
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 
@@ -36,10 +40,28 @@ class TranslationRequest(BaseModel):
     word: str = Field(..., min_length=1)
 
 
+class SimplifyRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    target_level: str = Field(..., pattern=r"^N[1-5]$")
+
+
+class SimplifyResponse(BaseModel):
+    text: str
+    target_level: str
+    annotations: list[AnnotatedToken] = Field(default_factory=list)
+
+
 class AnnotatedToken(BaseModel):
     text: str
+    base_form: str | None = None
+    part_of_speech: str | None = None
+    is_content: bool = False
+    is_proper_noun: bool = False
     jlpt_level: int | None = None
     reading: str | None = None
+    frequency_rank: int | None = None
+    kanji_levels: list[int] = Field(default_factory=list)
+    unknown_kanji_count: int = 0
 
 
 class AnnotationResponse(BaseModel):
@@ -74,21 +96,104 @@ def get_rag_graph():
 
 
 @lru_cache(maxsize=1)
+def get_simplification_model():
+    """Create a small cached chat model for text simplification requests."""
+    return init_chat_model("kimi-k2.6:cloud", model_provider="ollama", temperature=0.2)
+
+
+@lru_cache(maxsize=1)
+def get_frequency_vocab() -> dict[str, int]:
+    """Load word-frequency ranks. Higher rank means rarer/more difficult."""
+    frequency_path = (
+        Path(__file__).parent.parent
+        / "documents"
+        / "jpn_newscrawl_2019_1M-words.txt"
+    )
+    frequencies: dict[str, int] = {}
+
+    if not frequency_path.exists():
+        return frequencies
+
+    with frequency_path.open(encoding="utf-8") as file:
+        for line in file:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            rank_text, word = parts[:2]
+            if not word or word in frequencies:
+                continue
+            try:
+                frequencies[word] = int(rank_text)
+            except ValueError:
+                continue
+
+    return frequencies
+
+
+@lru_cache(maxsize=1)
+def get_sudachi_tokenizer():
+    """Create the Sudachi tokenizer once; used for surfaces, POS, and lemmas."""
+    return sudachi_dictionary.Dictionary().create()
+
+
+@lru_cache(maxsize=1)
 def get_jlpt_vocab() -> dict[str, dict[str, int | str]]:
     """Load JLPT vocabulary for fast surface-form and reading lookups."""
     vocab_path = Path(__file__).parent.parent / "documents" / "JLPT_vocab_ALL.csv"
     vocab: dict[str, dict[str, int | str]] = {}
+    kana_candidates: dict[str, dict[str, int | str]] = {}
+
+    def is_kana_key(key: str) -> bool:
+        return bool(re.fullmatch(r"[\u3040-\u30ffー]+", key))
+
+    def keep_easiest_kana_entry(key: str, entry: dict[str, int | str]) -> None:
+        """Prefer the most common/easiest JLPT match for ambiguous kana readings."""
+        current_entry = kana_candidates.get(key)
+        if current_entry is None or int(entry["level"]) > int(current_entry["level"]):
+            kana_candidates[key] = entry
 
     with vocab_path.open(encoding="utf-8", newline="") as file:
         for row in csv.DictReader(file):
             level = int(row["Level"])
             entry = {"level": level, "reading": row["Reading"]}
-            vocab.setdefault(row["Kanji"], entry)
-            vocab.setdefault(row["Reading"], entry)
 
+            if is_kana_key(row["Kanji"]):
+                keep_easiest_kana_entry(row["Kanji"], entry)
+            else:
+                vocab.setdefault(row["Kanji"], entry)
+
+            keep_easiest_kana_entry(row["Reading"], entry)
+
+    vocab.update(kana_candidates)
     return vocab
 
 
+@lru_cache(maxsize=1)
+def get_jlpt_kanji() -> dict[str, int]:
+    """Load JLPT kanji levels keyed by individual kanji characters."""
+    kanji_path = Path(__file__).parent.parent / "documents" / "JLPT_kanji_ALL.csv"
+    kanji_levels: dict[str, int] = {}
+
+    if not kanji_path.exists():
+        return kanji_levels
+
+    with kanji_path.open(encoding="utf-8", newline="") as file:
+        reader = csv.reader(file)
+        next(reader, None)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            kanji, level_text = row[:2]
+            try:
+                kanji_levels[kanji] = int(level_text)
+            except ValueError:
+                continue
+
+    return kanji_levels
+
+
+KANJI_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+HIRAGANA_ONLY_RE = re.compile(r"[\u3040-\u309fー]+")
 JAPANESE_RUN_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤]+")
 JITENDEX_URL = (
     "https://github.com/stephenmk/stephenmk.github.io/releases/latest/download/"
@@ -100,6 +205,9 @@ JITENDEX_CACHE_PATH = Path(__file__).parent / "data" / "jitendex-cache.json"
 
 def build_annotations(text: str) -> AnnotationResponse:
     vocab = get_jlpt_vocab()
+    frequencies = get_frequency_vocab()
+    kanji_lookup = get_jlpt_kanji()
+    sudachi = get_sudachi_tokenizer()
     tokens: list[AnnotatedToken] = []
     cursor = 0
 
@@ -107,35 +215,91 @@ def build_annotations(text: str) -> AnnotationResponse:
         if match.start() > cursor:
             tokens.append(AnnotatedToken(text=text[cursor:match.start()]))
 
-        tagged = nagisa.tagging(match.group())
-        words = tagged.words
-        postags = tagged.postags
+        morphemes = list(
+            sudachi.tokenize(match.group(), sudachi_tokenizer.Tokenizer.SplitMode.A)
+        )
+        words = [morpheme.surface() for morpheme in morphemes]
+        lemmas = [morpheme.dictionary_form() for morpheme in morphemes]
+        pos_details = [morpheme.part_of_speech() for morpheme in morphemes]
+        postags = [pos_detail[0] for pos_detail in pos_details]
         index = 0
         while index < len(words):
             best_surface = words[index]
-            best_entry = vocab.get(best_surface)
+            allow_lemma_lookup = not HIRAGANA_ONLY_RE.fullmatch(best_surface)
+            best_base_form = (
+                lemmas[index] if allow_lemma_lookup and lemmas[index] != best_surface else None
+            )
+            best_pos_details = [pos_details[index]]
+            best_entry = vocab.get(best_surface) or (
+                vocab.get(lemmas[index]) if allow_lemma_lookup else None
+            )
+            best_lookup_key = (
+                best_surface
+                if best_surface in frequencies or not allow_lemma_lookup
+                else lemmas[index]
+            )
             best_end = index + 1
 
             for end in range(min(len(words), index + 8), index, -1):
+                if end > index + 1 and any(
+                    pos in {"助詞", "助動詞", "補助記号"} for pos in postags[index:end]
+                ):
+                    continue
+
                 surface = "".join(words[index:end])
-                entry = vocab.get(surface)
+                base_form = "".join(lemmas[index:end])
+                allow_lemma_lookup = not HIRAGANA_ONLY_RE.fullmatch(surface)
+                entry = vocab.get(surface) or (vocab.get(base_form) if allow_lemma_lookup else None)
                 if entry:
                     best_surface = surface
+                    best_base_form = base_form if allow_lemma_lookup and base_form != surface else None
                     best_entry = entry
+                    best_lookup_key = surface if surface in frequencies or not allow_lemma_lookup else base_form
+                    best_pos_details = pos_details[index:end]
                     best_end = end
                     break
 
-            if best_end == index + 1 and (
-                postags[index] in {"助詞", "助動詞", "補助記号"}
-                or re.fullmatch(r"[\u3040-\u309f]", best_surface)
-            ):
+            is_grammar_token = best_end == index + 1 and postags[index] in {
+                "助詞",
+                "助動詞",
+                "補助記号",
+            }
+            if is_grammar_token:
+                best_base_form = None
                 best_entry = None
+                best_lookup_key = ""
+            elif best_entry is None and HIRAGANA_ONLY_RE.fullmatch(best_surface):
+                best_lookup_key = ""
+
+            kanji_chars = KANJI_RE.findall(best_surface)
+            kanji_levels = [kanji_lookup[char] for char in kanji_chars if char in kanji_lookup]
+            unknown_kanji_count = len(kanji_chars) - len(kanji_levels)
+            is_proper_noun = any(
+                len(pos_detail) > 1 and pos_detail[1] == "固有名詞"
+                for pos_detail in best_pos_details
+            )
+            is_auxiliary_hiragana_verb = (
+                best_entry is None
+                and HIRAGANA_ONLY_RE.fullmatch(best_surface)
+                and any(pos_detail[0] == "動詞" for pos_detail in best_pos_details)
+            )
+            is_content = not is_grammar_token and not is_auxiliary_hiragana_verb and any(
+                pos_detail[0] in {"名詞", "動詞", "形容詞", "副詞"}
+                for pos_detail in best_pos_details
+            )
 
             tokens.append(
                 AnnotatedToken(
                     text=best_surface,
+                    base_form=best_base_form,
+                    part_of_speech="/".join(pos_detail[0] for pos_detail in best_pos_details),
+                    is_content=is_content,
+                    is_proper_noun=is_proper_noun,
                     jlpt_level=best_entry["level"] if best_entry else None,
                     reading=best_entry["reading"] if best_entry else None,
+                    frequency_rank=frequencies.get(best_lookup_key),
+                    kanji_levels=kanji_levels,
+                    unknown_kanji_count=unknown_kanji_count,
                 )
             )
             index = best_end
@@ -262,6 +426,70 @@ def build_stats(text: str) -> StatsResponse:
     )
 
 
+SIMPLIFICATION_CACHE: dict[tuple[str, str], str] = {}
+
+
+def build_simplification_prompt(source_text: str, target_level: str) -> str:
+    return f"""
+Rewrite this Japanese text for JLPT {target_level}. Keep meaning, names, numbers, and tone. Use natural {target_level}-level vocabulary/grammar. Return only Japanese text, no notes.
+
+{source_text}
+""".strip()
+
+
+@lru_cache(maxsize=128)
+def simplify_text_cached(source_text: str, target_level: str) -> str:
+    """Generate and cache simplified variants by exact source text and target level."""
+    prompt = build_simplification_prompt(source_text, target_level)
+    model = get_simplification_model()
+    response = model.invoke([{"role": "user", "content": prompt}])
+    simplified_text = response.content.strip()
+    SIMPLIFICATION_CACHE[(source_text, target_level)] = simplified_text
+    return simplified_text
+
+
+def stream_simplified_text(source_text: str, target_level: str):
+    """Yield simplified text chunks from Ollama as soon as tokens arrive."""
+    cached_text = SIMPLIFICATION_CACHE.get((source_text, target_level))
+    if cached_text is not None:
+        for index in range(0, len(cached_text), 8):
+            yield cached_text[index : index + 8]
+        return
+
+    prompt = build_simplification_prompt(source_text, target_level)
+    ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+    payload = json.dumps(
+        {
+            "model": "kimi-k2.6:cloud",
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+            "think": False,
+            "options": {"temperature": 0.2},
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{ollama_host}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    chunks: list[str] = []
+
+    with urllib.request.urlopen(request, timeout=180) as response:
+        for line in response:
+            if not line.strip():
+                continue
+            event = json.loads(line.decode("utf-8"))
+            if event.get("error"):
+                raise RuntimeError(event["error"])
+            content = event.get("message", {}).get("content", "")
+            if not content:
+                continue
+            chunks.append(content)
+            yield content
+
+    SIMPLIFICATION_CACHE[(source_text, target_level)] = "".join(chunks).strip()
+
+
 app = FastAPI(title="Language Assistant API")
 
 app.add_middleware(
@@ -308,6 +536,72 @@ def stats(request: StatsRequest):
 @app.post("/annotate", response_model=AnnotationResponse)
 def annotate(request: AnnotateRequest):
     return build_annotations(request.text)
+
+
+@app.post("/simplify", response_model=SimplifyResponse)
+async def simplify(request: SimplifyRequest):
+    source_text = request.text.strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail="Text must not be empty.")
+
+    try:
+        simplified_text = await asyncio.to_thread(
+            simplify_text_cached, source_text, request.target_level
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if not simplified_text:
+        raise HTTPException(status_code=500, detail="Simplification returned no text.")
+
+    annotations = build_annotations(simplified_text).tokens
+    return SimplifyResponse(
+        text=simplified_text,
+        target_level=request.target_level,
+        annotations=annotations,
+    )
+
+
+@app.post("/simplify/stream")
+async def simplify_stream(request: SimplifyRequest):
+    source_text = request.text.strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail="Text must not be empty.")
+
+    async def event_stream():
+        simplified_chunks: list[str] = []
+        try:
+            for chunk in stream_simplified_text(source_text, request.target_level):
+                simplified_chunks.append(chunk)
+                yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False) + "\n"
+                await asyncio.sleep(0.025)
+
+            simplified_text = "".join(simplified_chunks).strip()
+            if not simplified_text:
+                yield json.dumps(
+                    {"type": "error", "detail": "Simplification returned no text."},
+                    ensure_ascii=False,
+                ) + "\n"
+                return
+
+            annotations = [token.model_dump() for token in build_annotations(simplified_text).tokens]
+            yield json.dumps(
+                {
+                    "type": "done",
+                    "text": simplified_text,
+                    "target_level": request.target_level,
+                    "annotations": annotations,
+                },
+                ensure_ascii=False,
+            ) + "\n"
+        except Exception as exc:
+            yield json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/translate", response_model=TranslationResponse)

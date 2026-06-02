@@ -25,17 +25,6 @@ body {
   background-size: 40px 40px, 40px 40px, auto;
 }
 
-body::before {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  content: "";
-  opacity: 0.42;
-  background-image: radial-gradient(rgba(35, 31, 26, 0.18) 0.55px, transparent 0.55px);
-  background-size: 5px 5px;
-  mix-blend-mode: multiply;
-}
-
 #root {
   min-height: 100vh;
 }

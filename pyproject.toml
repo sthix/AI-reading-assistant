@@ -20,5 +20,6 @@ dependencies = [
     "fastapi>=0.136.1",
     "uvicorn>=0.46.0",
     "python-multipart>=0.0.28",
-    "nagisa>=0.2.12",
+    "sudachipy>=0.6.11",
+    "sudachidict-core>=20260428",
 ]
