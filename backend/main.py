@@ -98,7 +98,7 @@ def get_rag_graph():
 @lru_cache(maxsize=1)
 def get_simplification_model():
     """Create a small cached chat model for text simplification requests."""
-    return init_chat_model("kimi-k2.6:cloud", model_provider="ollama", temperature=0.2)
+    return init_chat_model("gemma4:31b-cloud", model_provider="ollama", temperature=0.2)
 
 
 @lru_cache(maxsize=1)
