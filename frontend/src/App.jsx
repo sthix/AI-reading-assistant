@@ -57,7 +57,11 @@ function levelToScore(level) {
 
 function getVocabularyLevel(token) {
   if (token.jlpt_level) return 6 - token.jlpt_level;
-  if (!token.frequency_rank) return 6;
+  // A word missing from both the JLPT and frequency lists is "unknown", not
+  // "maximum difficulty". Most misses are common kana words the curated lists
+  // simply lack, and simplified rewrites contain more of them — scoring those
+  // as harder-than-N1 inverts the metric. Return null so callers can exclude it.
+  if (!token.frequency_rank) return null;
   if (token.frequency_rank <= 2000) return 3;
   if (token.frequency_rank <= 5000) return 4;
   if (token.frequency_rank <= 10000) return 5;
@@ -123,7 +127,9 @@ function getTextStats(text, annotations) {
     }
   });
 
-  const vocabularyLevels = contentTokens.map(getVocabularyLevel);
+  const vocabularyLevels = contentTokens
+    .map(getVocabularyLevel)
+    .filter((level) => level !== null);
   const vocabularyLevelScore = vocabularyLevels.length
     ? average(
         [
@@ -139,8 +145,14 @@ function getTextStats(text, annotations) {
   const typeTokenRatio = contentTokens.length
     ? contentTypes.size / contentTokens.length
     : 0;
+  // Type-token ratio rises automatically as a text gets shorter (less room to
+  // repeat words), so on short simplified rewrites a high TTR signals brevity,
+  // not vocabulary diversity. Ramp the penalty in with sample size so it only
+  // contributes once there are enough content tokens to be meaningful.
+  const typeTokenConfidence = Math.min(1, contentTokens.length / 40);
   const vocabScore = clampScore(
-    vocabularyLevelScore + Math.max(0, typeTokenRatio - 0.45) * 18,
+    vocabularyLevelScore +
+      Math.max(0, typeTokenRatio - 0.45) * 18 * typeTokenConfidence,
   );
 
   const kanjiCharacters = [...text].filter((char) =>
