@@ -3,3 +3,4 @@ backend/data/*.json
 frontend/dist/
 __pycache__/
 *.pyc
+.gstack/
