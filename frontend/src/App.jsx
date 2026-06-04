@@ -4,37 +4,160 @@ import "./App.css";
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
-const welcomeMessage =
-  "Paste a text, then ask about words, meaning, grammar, or usage.";
-
-const initialMessages = [
-  {
-    role: "assistant",
-    content: welcomeMessage,
+const languageConfigs = {
+  japanese: {
+    label: "Japanese",
+    shortLabel: "日本語",
+    navLabel: "Japanese Assistant",
+    tutorTitle: "Ask the Japanese tutor",
+    welcome:
+      "Paste Japanese text, then ask about words, meaning, JLPT level, grammar, or usage.",
+    info:
+      "Paste or upload Japanese text, inspect JLPT/frequency difficulty, ask the Japanese tutor questions, and generate an easier AI rewrite for your target level.",
+    chatPlaceholder: "Ask about a Japanese word, meaning, usage, or JLPT level…",
+    textTitle: "Paste or edit Japanese text",
+    placeholder: "Paste Japanese text here, or upload a .txt, .md, or .csv file above…",
+    lang: "ja",
+    dir: "ltr",
+    scaleLabel: "JLPT",
+    listedLabel: "JLPT / frequency content words",
+    levels: ["N5", "N4", "N3", "N2", "N1"],
+    chartLevels: ["N5", "N4", "N3", "N2", "N1"],
+    targetLevels: ["N5", "N4", "N3", "N2", "N1"],
+    defaultTarget: "N4",
+    classForLevel: (level) => `jlpt-n${level.replace("N", "")}`,
   },
-];
-
-const jlptLabels = {
-  1: "N1",
-  2: "N2",
-  3: "N3",
-  4: "N4",
-  5: "N5",
+  hebrew: {
+    label: "Hebrew",
+    shortLabel: "עברית",
+    navLabel: "Hebrew Assistant",
+    tutorTitle: "Ask the Hebrew tutor",
+    welcome:
+      "Paste Hebrew text, then ask about words, meaning, CEFR level, or usage.",
+    info:
+      "Paste or upload Hebrew text, inspect CEFR A1-C1 difficulty, ask the Hebrew tutor questions, and generate an easier AI rewrite for your target level.",
+    chatPlaceholder: "Ask about a Hebrew word, meaning, usage, or CEFR level…",
+    textTitle: "Paste or edit Hebrew text",
+    placeholder: "Paste Hebrew text here, or upload a .txt, .md, or .csv file above…",
+    lang: "he",
+    dir: "rtl",
+    scaleLabel: "CEFR",
+    listedLabel: "CEFR / listed Hebrew words",
+    levels: ["A1", "A2", "B1", "B2", "C1"],
+    chartLevels: ["C1", "B2", "B1", "A2", "A1"],
+    targetLevels: ["A1", "A2", "B1", "B2", "C1"],
+    defaultTarget: "B1",
+    classForLevel: (level) => `cefr-${level.toLowerCase()}`,
+  },
 };
-
-const targetLevelOptions = ["N5", "N4", "N3", "N2", "N1"];
 
 const japaneseWordPattern = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤]/;
 const japanesePunctuationPattern = /^[。、！？「」『』（）［］【】・…ー\s]+$/;
+const hebrewWordPattern = /[\u0590-\u05ff]/;
+const hebrewRunPattern = /[\u0590-\u05ff]+(?:[׳'״"-][\u0590-\u05ff]+)*/g;
+const hebrewPunctuationPattern = /^[.,!?;:()[\]{}\s־״׳'"-]+$/;
+const hebrewMarksPattern = /[\u0591-\u05bd\u05bf-\u05c7]/g;
+const hebrewBidiControlPattern = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const hebrewTableRulePattern = /^\s*[|:;–—\s-]+\s*$/gm;
+
+function getInitialMessages(language) {
+  return [{ role: "assistant", content: languageConfigs[language].welcome }];
+}
+
+function normalizeSourceForLanguage(value, language) {
+  const trimmed = value.trim();
+  if (language !== "hebrew") return trimmed;
+  return trimmed
+    .replace(hebrewBidiControlPattern, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/(^|\s)\d+($|\s)/g, " ")
+    .replace(hebrewTableRulePattern, " ")
+    .replace(/[|]+/g, " ")
+    .replace(/(?:^|\n)\s*[-*•]+\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function clampScore(score) {
   return Math.max(0, Math.min(100, score));
 }
 
-function canLookupToken(token) {
+function canLookupToken(token, language) {
+  if (language === "hebrew") {
+    return (
+      hebrewWordPattern.test(token.text) &&
+      !hebrewPunctuationPattern.test(token.text)
+    );
+  }
   return (
     japaneseWordPattern.test(token.text) &&
     !japanesePunctuationPattern.test(token.text)
   );
+}
+
+function getHebrewSeparatorText(value) {
+  const cleaned = value
+    .replace(hebrewBidiControlPattern, "")
+    .replace(/[|]+/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\s+/g, " ");
+
+  if (!cleaned.trim()) return " ";
+  return hebrewPunctuationPattern.test(cleaned) ? cleaned : " ";
+}
+
+function normalizeHebrewWordForComparison(value) {
+  return value
+    .replace(hebrewMarksPattern, "")
+    .replace(/־/g, "-")
+    .trim();
+}
+
+function getHebrewComparisonKeys(value) {
+  const normalized = normalizeHebrewWordForComparison(value);
+  if (!normalized) return [];
+
+  const keys = new Set([normalized]);
+  let withoutPrefixes = normalized;
+  while (
+    withoutPrefixes.length > 2 &&
+    /^[ובהלכמש]/.test(withoutPrefixes)
+  ) {
+    withoutPrefixes = withoutPrefixes.slice(1);
+    if (withoutPrefixes.length > 1) keys.add(withoutPrefixes);
+  }
+  return [...keys];
+}
+
+function getHebrewWordSetFromText(value) {
+  const words = new Set();
+  Array.from(value.matchAll(hebrewRunPattern), ([word]) => {
+    getHebrewComparisonKeys(word).forEach((key) => words.add(key));
+  });
+  return words;
+}
+
+function isHebrewSourceWord(value, sourceWords) {
+  return getHebrewComparisonKeys(value).some((key) => sourceWords.has(key));
+}
+
+function filterHebrewSourceWordsFromText(value, sourceWords) {
+  if (sourceWords.size === 0) return normalizeSourceForLanguage(value, "hebrew");
+  return normalizeSourceForLanguage(
+    value.replace(hebrewRunPattern, (word) =>
+      isHebrewSourceWord(word, sourceWords) ? " " : word,
+    ),
+    "hebrew",
+  );
+}
+
+function filterHebrewSourceTokens(tokens, sourceWords) {
+  if (sourceWords.size === 0) return tokens;
+  return tokens.filter((token) => {
+    if (!canLookupToken(token, "hebrew")) return true;
+    const sourceCandidates = [token.text, token.base_form].filter(Boolean);
+    return !sourceCandidates.some((word) => isHebrewSourceWord(word, sourceWords));
+  });
 }
 
 function average(scores) {
@@ -51,16 +174,19 @@ function percentile(scores, percentileValue) {
   return sortedScores[Math.max(0, Math.min(sortedScores.length - 1, index))];
 }
 
-function levelToScore(level) {
-  return clampScore(((level - 1) / 5) * 100);
+function levelToScore(level, language) {
+  if (language === "hebrew") {
+    const index = languageConfigs.hebrew.levels.indexOf(level);
+    if (index < 0) return null;
+    return clampScore((index / (languageConfigs.hebrew.levels.length - 1)) * 100);
+  }
+  const number = Number(String(level).replace("N", ""));
+  if (!number) return null;
+  return clampScore(((5 - number) / 4) * 100);
 }
 
-function getVocabularyLevel(token) {
+function getJapaneseVocabularyLevel(token) {
   if (token.jlpt_level) return 6 - token.jlpt_level;
-  // A word missing from both the JLPT and frequency lists is "unknown", not
-  // "maximum difficulty". Most misses are common kana words the curated lists
-  // simply lack, and simplified rewrites contain more of them — scoring those
-  // as harder-than-N1 inverts the metric. Return null so callers can exclude it.
   if (!token.frequency_rank) return null;
   if (token.frequency_rank <= 2000) return 3;
   if (token.frequency_rank <= 5000) return 4;
@@ -68,7 +194,7 @@ function getVocabularyLevel(token) {
   return 6;
 }
 
-function getKanjiLevel(token) {
+function getJapaneseKanjiLevel(token) {
   const knownLevels = (token.kanji_levels ?? []).map((level) => 6 - level);
   const unknownLevels = Array.from(
     { length: token.unknown_kanji_count ?? 0 },
@@ -80,7 +206,7 @@ function getKanjiLevel(token) {
   return average(levels) * 0.55 + Math.max(...levels) * 0.45;
 }
 
-function getGrammarScore(text) {
+function getJapaneseGrammarScore(text) {
   const sentenceCount = Math.max(
     1,
     text.split(/[。！？!?]+/).filter((sentence) => sentence.trim()).length,
@@ -94,13 +220,14 @@ function getGrammarScore(text) {
   return clampScore(grammarHitsPerSentence * 38);
 }
 
-function getSentenceLengthScore(annotations) {
+function getSentenceLengthScore(annotations, language) {
   const sentenceLengths = [];
   let currentLength = 0;
 
   annotations.forEach((token) => {
-    if (canLookupToken(token)) currentLength += 1;
-    if (/[。！？!?]/.test(token.text)) {
+    if (canLookupToken(token, language)) currentLength += 1;
+    const sentencePattern = language === "japanese" ? /[。！？!?]/ : /[.!?؟]+/;
+    if (sentencePattern.test(token.text)) {
       if (currentLength > 0) sentenceLengths.push(currentLength);
       currentLength = 0;
     }
@@ -108,27 +235,91 @@ function getSentenceLengthScore(annotations) {
   if (currentLength > 0) sentenceLengths.push(currentLength);
 
   const meanSentenceLength = average(sentenceLengths);
-  return clampScore(((meanSentenceLength - 6) / 24) * 100);
+  const baseline = language === "japanese" ? 6 : 7;
+  const spread = language === "japanese" ? 24 : 22;
+  return clampScore(((meanSentenceLength - baseline) / spread) * 100);
 }
 
-function getTextStats(text, annotations) {
-  const distribution = [1, 2, 3, 4, 5].reduce(
+function getHebrewVocabularyScore(token) {
+  if (token.cefr_level) return levelToScore(token.cefr_level, "hebrew");
+  if (!token.frequency_rank) return null;
+  if (token.frequency_rank <= 250) return levelToScore("A1", "hebrew");
+  if (token.frequency_rank <= 500) return levelToScore("A2", "hebrew");
+  if (token.frequency_rank <= 800) return levelToScore("B1", "hebrew");
+  if (token.frequency_rank <= 1000) return levelToScore("B2", "hebrew");
+  return levelToScore("C1", "hebrew");
+}
+
+function getTextStats(text, annotations, language) {
+  const config = languageConfigs[language];
+  const distribution = config.levels.reduce(
     (levels, level) => ({ ...levels, [level]: 0 }),
     {},
   );
-  const lookupTokens = annotations.filter((token) => canLookupToken(token));
+  const lookupTokens = annotations.filter((token) => canLookupToken(token, language));
   const contentTokens = lookupTokens.filter(
     (token) => token.is_content && !token.is_proper_noun,
   );
 
+  if (language === "hebrew") {
+    contentTokens.forEach((token) => {
+      if (token.cefr_level && distribution[token.cefr_level] !== undefined) {
+        distribution[token.cefr_level] += 1;
+      }
+    });
+
+    const vocabularyScores = contentTokens
+      .map(getHebrewVocabularyScore)
+      .filter((score) => score !== null);
+    const vocabularyLevelScore = vocabularyScores.length
+      ? average([
+          average(vocabularyScores),
+          percentile(vocabularyScores, 75),
+          percentile(vocabularyScores, 90),
+        ])
+      : 0;
+    const contentTypes = new Set(contentTokens.map((token) => token.text));
+    const typeTokenRatio = contentTokens.length
+      ? contentTypes.size / contentTokens.length
+      : 0;
+    const typeTokenConfidence = Math.min(1, contentTokens.length / 40);
+    const vocabScore = clampScore(
+      vocabularyLevelScore +
+        Math.max(0, typeTokenRatio - 0.5) * 18 * typeTokenConfidence,
+    );
+    const sentenceLengthScore = getSentenceLengthScore(annotations, language);
+    const difficultyScore = Math.round(
+      clampScore(vocabScore * 0.75 + sentenceLengthScore * 0.25),
+    );
+    const leveledWordCount = Object.values(distribution).reduce(
+      (sum, count) => sum + count,
+      0,
+    );
+    const listedWordCount = contentTokens.filter(
+      (token) => token.cefr_level || token.frequency_rank,
+    ).length;
+
+    return {
+      characters: text.length,
+      charactersNoSpaces: [...text].filter((char) => !/\s/.test(char)).length,
+      lines: text.length === 0 ? 0 : text.split("\n").length,
+      tokens: annotations.filter((token) => token.text.trim() !== "").length,
+      lookupTokens: lookupTokens.length,
+      leveledWordCount,
+      listedWordCount,
+      distribution,
+      difficultyScore,
+    };
+  }
+
   contentTokens.forEach((token) => {
     if (token.jlpt_level) {
-      distribution[token.jlpt_level] += 1;
+      distribution[`N${token.jlpt_level}`] += 1;
     }
   });
 
   const vocabularyLevels = contentTokens
-    .map(getVocabularyLevel)
+    .map(getJapaneseVocabularyLevel)
     .filter((level) => level !== null);
   const vocabularyLevelScore = vocabularyLevels.length
     ? average(
@@ -136,7 +327,7 @@ function getTextStats(text, annotations) {
           average(vocabularyLevels),
           percentile(vocabularyLevels, 75),
           percentile(vocabularyLevels, 90),
-        ].map(levelToScore),
+        ].map((level) => clampScore(((level - 1) / 5) * 100)),
       )
     : 0;
   const contentTypes = new Set(
@@ -145,10 +336,6 @@ function getTextStats(text, annotations) {
   const typeTokenRatio = contentTokens.length
     ? contentTypes.size / contentTokens.length
     : 0;
-  // Type-token ratio rises automatically as a text gets shorter (less room to
-  // repeat words), so on short simplified rewrites a high TTR signals brevity,
-  // not vocabulary diversity. Ramp the penalty in with sample size so it only
-  // contributes once there are enough content tokens to be meaningful.
   const typeTokenConfidence = Math.min(1, contentTokens.length / 40);
   const vocabScore = clampScore(
     vocabularyLevelScore +
@@ -163,19 +350,21 @@ function getTextStats(text, annotations) {
   ).length;
   const kanjiDensity = kanjiCharacters / Math.max(1, nonSpaceCharacters);
   const kanjiLevels = lookupTokens
-    .map(getKanjiLevel)
+    .map(getJapaneseKanjiLevel)
     .filter((level) => level !== null);
   const kanjiLevelScore = kanjiLevels.length
     ? average(
-        [average(kanjiLevels), percentile(kanjiLevels, 75)].map(levelToScore),
+        [average(kanjiLevels), percentile(kanjiLevels, 75)].map((level) =>
+          clampScore(((level - 1) / 5) * 100),
+        ),
       )
     : 0;
   const kanjiScore = clampScore(
     kanjiLevelScore * 0.7 + kanjiDensity * 100 * 0.3,
   );
 
-  const sentenceLengthScore = getSentenceLengthScore(annotations);
-  const grammarScore = getGrammarScore(text);
+  const sentenceLengthScore = getSentenceLengthScore(annotations, language);
+  const grammarScore = getJapaneseGrammarScore(text);
   const difficultyScore = Math.round(
     clampScore(
       vocabScore * 0.5 +
@@ -184,12 +373,11 @@ function getTextStats(text, annotations) {
         grammarScore * 0.15,
     ),
   );
-
-  const jlptWordCount = Object.values(distribution).reduce(
+  const leveledWordCount = Object.values(distribution).reduce(
     (sum, count) => sum + count,
     0,
   );
-  const frequencyWordCount = contentTokens.filter(
+  const listedWordCount = contentTokens.filter(
     (token) => token.frequency_rank,
   ).length;
 
@@ -199,14 +387,26 @@ function getTextStats(text, annotations) {
     lines: text.length === 0 ? 0 : text.split("\n").length,
     tokens: annotations.filter((token) => token.text.trim() !== "").length,
     lookupTokens: lookupTokens.length,
-    jlptWordCount,
-    frequencyWordCount,
-    jlptDistribution: distribution,
+    leveledWordCount,
+    listedWordCount,
+    distribution,
     difficultyScore,
   };
 }
 
-function getDifficultyLabel(score) {
+function getDifficultyLabel(score, language, context = {}) {
+  if (language === "hebrew") {
+    if (score >= 86) return "C1 advanced";
+    if (score >= 66) return "B2 upper-intermediate";
+    if (score >= 40) return "B1 intermediate";
+    if (score > 0) return "A1–A2 foundational";
+    if (context.hasListedWords) return "A1 foundational";
+    if (context.isEasierTab && context.hasGeneratedText && !context.hasVisibleText) {
+      return "No new Hebrew words";
+    }
+    if (context.hasHebrewWords) return "No listed CEFR words";
+    return "Awaiting Hebrew words";
+  }
   if (score >= 86) return "Advanced";
   if (score >= 66) return "Upper-intermediate";
   if (score >= 40) return "Intermediate";
@@ -214,18 +414,23 @@ function getDifficultyLabel(score) {
   return "Awaiting JLPT words";
 }
 
-function getDefaultEasierTarget(distribution) {
-  const dominantLevel = [1, 2, 3, 4, 5].reduce((currentBest, level) =>
+function getDefaultEasierTarget(distribution, language) {
+  const config = languageConfigs[language];
+  const dominantLevel = config.levels.reduce((currentBest, level) =>
     distribution[level] > distribution[currentBest] ? level : currentBest,
   );
 
-  if (!distribution[dominantLevel]) return "N4";
-  return jlptLabels[Math.min(5, dominantLevel + 1)];
+  if (!distribution[dominantLevel]) return config.defaultTarget;
+  const dominantIndex = config.levels.indexOf(dominantLevel);
+  if (language === "hebrew") return config.levels[Math.max(0, dominantIndex - 1)];
+  return config.levels[Math.min(config.levels.length - 1, dominantIndex + 1)];
 }
 
 function App() {
+  const [language, setLanguage] = useState("japanese");
+  const config = languageConfigs[language];
   const [text, setText] = useState("");
-  const [messages, setMessages] = useState(initialMessages);
+  const [messages, setMessages] = useState(getInitialMessages(language));
   const [chatInput, setChatInput] = useState("");
   const [uploadedFileName, setUploadedFileName] = useState("");
   const [isUploading, setIsUploading] = useState(false);
@@ -233,7 +438,7 @@ function App() {
   const [isAnnotating, setIsAnnotating] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [activeTextTab, setActiveTextTab] = useState("source");
-  const [targetLevel, setTargetLevel] = useState("N4");
+  const [targetLevel, setTargetLevel] = useState(config.defaultTarget);
   const [easierText, setEasierText] = useState("");
   const [easierTextSource, setEasierTextSource] = useState("");
   const [easierAnnotations, setEasierAnnotations] = useState([]);
@@ -248,35 +453,126 @@ function App() {
   const easierEditorRef = useRef(null);
   const pendingTranslationsRef = useRef(new Set());
 
-  const activeText = activeTextTab === "easier" ? easierText : text;
-  const activeAnnotations = activeTextTab === "easier" ? easierAnnotations : annotations;
+  const sourceHebrewWords = useMemo(
+    () => (language === "hebrew" ? getHebrewWordSetFromText(text) : new Set()),
+    [text, language],
+  );
+  const visibleEasierText = useMemo(
+    () =>
+      language === "hebrew"
+        ? filterHebrewSourceWordsFromText(easierText, sourceHebrewWords)
+        : easierText,
+    [easierText, language, sourceHebrewWords],
+  );
+  const visibleEasierAnnotations = useMemo(
+    () =>
+      language === "hebrew"
+        ? filterHebrewSourceTokens(easierAnnotations, sourceHebrewWords)
+        : easierAnnotations,
+    [easierAnnotations, language, sourceHebrewWords],
+  );
+  const hasVisibleEasierText = visibleEasierText.trim() !== "";
+  const hasCompletedEasierVersion =
+    activeTextTab === "easier" &&
+    !isSimplifying &&
+    hasVisibleEasierText &&
+    (language === "hebrew" || easierAnnotations.length > 0);
+  const activeText = useMemo(
+    () =>
+      language === "hebrew" && activeTextTab === "easier"
+        ? visibleEasierText
+        : hasCompletedEasierVersion
+          ? visibleEasierText
+          : text,
+    [activeTextTab, hasCompletedEasierVersion, language, text, visibleEasierText],
+  );
+  const activeAnnotations = useMemo(
+    () =>
+      language === "hebrew" && activeTextTab === "easier"
+        ? isSimplifying
+          ? []
+          : visibleEasierAnnotations
+        : hasCompletedEasierVersion
+          ? visibleEasierAnnotations
+          : annotations,
+    [
+      activeTextTab,
+      annotations,
+      hasCompletedEasierVersion,
+      isSimplifying,
+      language,
+      visibleEasierAnnotations,
+    ],
+  );
   const sourceStats = useMemo(
-    () => getTextStats(text, annotations),
-    [text, annotations],
+    () => getTextStats(text, annotations, language),
+    [text, annotations, language],
   );
   const stats = useMemo(
-    () => getTextStats(activeText, activeAnnotations),
-    [activeText, activeAnnotations],
+    () => getTextStats(activeText, activeAnnotations, language),
+    [activeText, activeAnnotations, language],
   );
-  const maxJlptCount = Math.max(1, ...Object.values(stats.jlptDistribution));
-  const difficultyLabel = getDifficultyLabel(stats.difficultyScore);
+  const maxLevelCount = Math.max(1, ...Object.values(stats.distribution));
+  const difficultyLabel = getDifficultyLabel(stats.difficultyScore, language, {
+    hasGeneratedText: easierText.trim() !== "",
+    hasHebrewWords: hebrewWordPattern.test(activeText),
+    hasListedWords: stats.listedWordCount > 0,
+    hasVisibleText: activeText.trim() !== "",
+    isEasierTab: activeTextTab === "easier",
+  });
   const defaultEasierTarget = useMemo(
-    () => getDefaultEasierTarget(sourceStats.jlptDistribution),
-    [sourceStats.jlptDistribution],
+    () => getDefaultEasierTarget(sourceStats.distribution, language),
+    [sourceStats.distribution, language],
   );
-  const sourceNeedsTokenization = japaneseWordPattern.test(text) && annotations.length === 0;
-  const isSourceTokenized = text.trim() !== "" && !isAnnotating && !sourceNeedsTokenization;
+  const sourcePattern = language === "hebrew" ? hebrewWordPattern : japaneseWordPattern;
+  const sourceNeedsTokenization = sourcePattern.test(text) && annotations.length === 0;
+  const isSourceTokenized =
+    text.trim() !== "" && !isAnnotating && !sourceNeedsTokenization;
+  const listedTokens = useMemo(() => {
+    const seen = new Set();
+    return activeAnnotations
+      .filter((token) => canLookupToken(token, language))
+      .map((token) => {
+        const level =
+          language === "hebrew"
+            ? token.cefr_level
+            : token.jlpt_level
+              ? `N${token.jlpt_level}`
+              : null;
+        if (!level) return null;
+        const key = `${token.text}-${level}-${token.english_gloss ?? token.reading ?? ""}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        return {
+          word: token.text,
+          level,
+          detail:
+            language === "hebrew"
+              ? token.english_gloss
+              : token.reading || token.base_form,
+        };
+      })
+      .filter(Boolean);
+  }, [activeAnnotations, language]);
+  const showWordList = language !== "hebrew";
 
-  useEffect(() => {
-    setMessages((currentMessages) =>
-      currentMessages.map((message) =>
-        message.content.includes("こんにちは") ||
-        message.content.includes("JLPT")
-          ? { ...message, content: welcomeMessage }
-          : message,
-      ),
-    );
-  }, []);
+  function resetForLanguage(nextLanguage) {
+    setLanguage(nextLanguage);
+    setText("");
+    setMessages(getInitialMessages(nextLanguage));
+    setChatInput("");
+    setUploadedFileName("");
+    setActiveTextTab("source");
+    setTargetLevel(languageConfigs[nextLanguage].defaultTarget);
+    setEasierText("");
+    setEasierTextSource("");
+    setEasierAnnotations([]);
+    setPendingSimplifyLevel(null);
+    setAnnotations([]);
+    setTranslations({});
+    setActiveTooltip(null);
+    setError("");
+  }
 
   useEffect(() => {
     setTargetLevel(defaultEasierTarget);
@@ -295,8 +591,6 @@ function App() {
     const level = pendingSimplifyLevel;
     setPendingSimplifyLevel(null);
     generateEasierText(level, { skipSourceTokenizationCheck: true });
-    // generateEasierText is intentionally omitted: this effect is a small gate
-    // that releases one queued simplify request only after source tokenization finishes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSimplifying, isSourceTokenized, pendingSimplifyLevel]);
 
@@ -315,12 +609,12 @@ function App() {
         const response = await fetch(`${API_BASE_URL}/annotate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, language }),
           signal: controller.signal,
         });
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.detail ?? "Could not annotate Japanese text.");
+          throw new Error(data.detail ?? `Could not annotate ${config.label} text.`);
         }
         setAnnotations(data.tokens ?? []);
       } catch (annotationError) {
@@ -338,7 +632,7 @@ function App() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [text]);
+  }, [text, language, config.label]);
 
   async function loadTranslation(word) {
     if (
@@ -358,7 +652,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/translate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ word }),
+        body: JSON.stringify({ word, language }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -368,7 +662,7 @@ function App() {
         ...currentTranslations,
         [word]: data.translation || "Translation unavailable",
       }));
-      if (data.reading) {
+      if (language === "japanese" && data.reading) {
         const addReading = (currentAnnotations) =>
           currentAnnotations.map((token) =>
             (token.text === word || token.base_form === word) && !token.reading
@@ -396,11 +690,13 @@ function App() {
   function showTooltip(event, token) {
     const rect = event.currentTarget.getBoundingClientRect();
     const lookupWord = token.base_form ?? token.text;
+    const level = language === "hebrew" ? token.cefr_level : token.jlpt_level ? `N${token.jlpt_level}` : null;
     setActiveTooltip({
       word: token.text,
       lookupWord,
       baseForm: token.base_form,
-      level: token.jlpt_level,
+      level,
+      gloss: token.english_gloss,
       reading: token.reading,
       left: rect.left + rect.width / 2,
       top: rect.top - 10,
@@ -419,14 +715,20 @@ function App() {
     editor.replaceChildren();
     const tokens = tokenList.length > 0 ? tokenList : fallbackText ? [{ text: fallbackText }] : [];
 
+    let previousHebrewSeparator = false;
+
     tokens.forEach((token, index) => {
-      const level = token.jlpt_level;
-      const hasLevel = level !== null && level !== undefined;
-      const canLookup = canLookupToken(token);
+      const level = language === "hebrew" ? token.cefr_level : token.jlpt_level ? `N${token.jlpt_level}` : null;
+      const hasLevel = Boolean(level);
+      const canLookup = canLookupToken(token, language);
+      const isHebrewSeparator = language === "hebrew" && !canLookup;
+      if (isHebrewSeparator && previousHebrewSeparator) return;
+      previousHebrewSeparator = isHebrewSeparator;
+      if (!isHebrewSeparator) previousHebrewSeparator = false;
       const span = document.createElement("span");
-      span.textContent = token.text;
+      span.textContent = isHebrewSeparator ? getHebrewSeparatorText(token.text) : token.text;
       span.className = hasLevel
-        ? `annotated-token jlpt-n${level}`
+        ? `annotated-token ${config.classForLevel(level)}`
         : canLookup
           ? "lookup-token"
           : "plain-token";
@@ -439,13 +741,21 @@ function App() {
   }
 
   useEffect(() => {
+    if (language === "hebrew" && activeTextTab === "easier") {
+      editorRef.current?.replaceChildren();
+      return;
+    }
     renderAnnotatedText(editorRef.current, annotations, text);
-  }, [activeTextTab, annotations, text]);
+  }, [activeTextTab, annotations, text, language]);
 
   useEffect(() => {
+    if (language === "hebrew") {
+      easierEditorRef.current?.replaceChildren();
+      return;
+    }
     if (isSimplifying) return;
-    renderAnnotatedText(easierEditorRef.current, easierAnnotations, easierText);
-  }, [activeTextTab, easierAnnotations, easierText, isSimplifying]);
+    renderAnnotatedText(easierEditorRef.current, visibleEasierAnnotations, visibleEasierText);
+  }, [activeTextTab, visibleEasierAnnotations, visibleEasierText, isSimplifying, language]);
 
   function handleEditorPointer(event) {
     const tokenElement = event.target.closest?.("[data-token-index]");
@@ -500,7 +810,7 @@ function App() {
   }
 
   async function generateEasierText(level = targetLevel, options = {}) {
-    const sourceText = text.trim();
+    const sourceText = normalizeSourceForLanguage(text, language);
     if (!sourceText || isSimplifying) return;
 
     if (!options.skipSourceTokenizationCheck && !isSourceTokenized) {
@@ -519,7 +829,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/simplify/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: sourceText, target_level: level }),
+        body: JSON.stringify({ text: sourceText, target_level: level, language }),
       });
 
       if (!response.ok) {
@@ -533,6 +843,25 @@ function App() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let streamedText = "";
+
+      const processStreamLine = async (line) => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+
+        if (event.type === "chunk") {
+          streamedText += event.text ?? "";
+          setEasierText(normalizeSourceForLanguage(streamedText, language));
+          await new Promise((resolve) => window.requestAnimationFrame(resolve));
+        } else if (event.type === "done") {
+          streamedText = event.text ?? streamedText;
+          setEasierText(normalizeSourceForLanguage(streamedText, language));
+          setEasierAnnotations(event.annotations ?? []);
+          setEasierTextSource(sourceText);
+        } else if (event.type === "error") {
+          throw new Error(event.detail ?? "Could not create an easier version.");
+        }
+      };
 
       while (true) {
         const { value, done } = await reader.read();
@@ -543,20 +872,13 @@ function App() {
         buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (!line.trim()) continue;
-          const event = JSON.parse(line);
-
-          if (event.type === "chunk") {
-            setEasierText((currentText) => `${currentText}${event.text ?? ""}`);
-            await new Promise((resolve) => window.requestAnimationFrame(resolve));
-          } else if (event.type === "done") {
-            setEasierText(event.text ?? "");
-            setEasierAnnotations(event.annotations ?? []);
-            setEasierTextSource(sourceText);
-          } else if (event.type === "error") {
-            throw new Error(event.detail ?? "Could not create an easier version.");
-          }
+          await processStreamLine(line);
         }
+      }
+
+      buffer += decoder.decode();
+      if (buffer.trim()) {
+        await processStreamLine(buffer);
       }
     } catch (simplifyError) {
       setError(simplifyError.message);
@@ -566,10 +888,12 @@ function App() {
   }
 
   function handleTextTabChange(tab) {
-    setActiveTextTab(tab);
-    if (tab === "easier" && text.trim() && !easierText) {
-      generateEasierText();
+    if (language === "hebrew" && tab === "easier") {
+      editorRef.current?.replaceChildren();
+      easierEditorRef.current?.replaceChildren();
     }
+    setActiveTextTab(tab);
+    setActiveTooltip(null);
   }
 
   function handleTargetLevelChange(event) {
@@ -597,7 +921,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, language }),
       });
 
       const data = await response.json();
@@ -634,18 +958,31 @@ function App() {
   }
 
   function clearChat() {
-    setMessages(initialMessages);
+    setMessages(getInitialMessages(language));
     setError("");
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${language === "hebrew" ? "hebrew-mode" : "japanese-mode"}`}>
       <nav className="top-nav" aria-label="App navigation">
         <div className="brand-mark">
-          <span>Language Assistant</span>
+          <span>{config.navLabel}</span>
           <strong>Readr</strong>
         </div>
         <div className="nav-actions">
+          <div className="segmented-control" aria-label="Language mode">
+            {Object.entries(languageConfigs).map(([key, item]) => (
+              <button
+                key={key}
+                className={language === key ? "is-active" : ""}
+                type="button"
+                onClick={() => key !== language && resetForLanguage(key)}
+                aria-pressed={language === key}
+              >
+                {item.shortLabel}
+              </button>
+            ))}
+          </div>
           {uploadedFileName && <span className="nav-file-name">{uploadedFileName}</span>}
           <button
             className="nav-button"
@@ -675,7 +1012,7 @@ function App() {
 
       {showInfo && (
         <aside className="info-strip" role="note">
-          Paste or upload Japanese text, inspect JLPT/frequency difficulty, ask the tutor questions, and generate an easier AI rewrite for your target level.
+          {config.info}
         </aside>
       )}
 
@@ -686,7 +1023,7 @@ function App() {
           <div className="panel-header">
             <div>
               <p className="eyebrow">Margin notes</p>
-              <h2>Ask the tutor</h2>
+              <h2>{config.tutorTitle}</h2>
             </div>
             <button className="ghost-button" type="button" onClick={clearChat}>
               Clear
@@ -718,7 +1055,7 @@ function App() {
               type="text"
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
-              placeholder="Ask about meaning, grammar, usage, or difficulty…"
+              placeholder={config.chatPlaceholder}
               disabled={isAnswering}
             />
             <button
@@ -730,11 +1067,11 @@ function App() {
           </form>
         </aside>
 
-        <section className="panel text-panel">
+        <section className="panel text-panel" data-active-tab={activeTextTab}>
           <div className="panel-header">
             <div>
               <p className="eyebrow">Study text</p>
-              <h2>{activeTextTab === "source" ? "Paste or edit study text" : "AI easier version"}</h2>
+              <h2>{activeTextTab === "source" ? config.textTitle : "AI easier version"}</h2>
             </div>
             <div className="text-actions">
               {isAnnotating && activeTextTab === "source" && (
@@ -774,36 +1111,35 @@ function App() {
             </button>
           </div>
 
-          <div className="jlpt-legend" aria-label="JLPT color legend">
-            {[5, 4, 3, 2, 1].map((level) => (
-              <span key={level} className={`legend-chip jlpt-n${level}`}>
-                {jlptLabels[level]}
+          <div className="jlpt-legend" aria-label={`${config.scaleLabel} color legend`}>
+            {config.levels.map((level) => (
+              <span key={level} className={`legend-chip ${config.classForLevel(level)}`}>
+                {level}
               </span>
             ))}
           </div>
 
           {activeTextTab === "source" ? (
-            <>
-              <div className="editor-frame">
-                <div
-                  ref={editorRef}
-                  className="study-editor"
-                  contentEditable
-                  data-placeholder="Paste text here, or upload a .txt, .md, or .csv file above…"
-                  lang="ja"
-                  onBlur={() => setActiveTooltip(null)}
-                  onFocus={handleEditorPointer}
-                  onInput={handleEditorInput}
-                  onMouseEnter={handleEditorPointer}
-                  onMouseLeave={() => setActiveTooltip(null)}
-                  onMouseMove={handleEditorPointer}
-                  onPaste={handleEditorPaste}
-                  role="textbox"
-                  spellCheck="false"
-                  suppressContentEditableWarning
-                />
-              </div>
-            </>
+            <div className="editor-frame">
+              <div
+                ref={editorRef}
+                className="study-editor"
+                contentEditable
+                data-placeholder={config.placeholder}
+                dir={config.dir}
+                lang={config.lang}
+                onBlur={() => setActiveTooltip(null)}
+                onFocus={handleEditorPointer}
+                onInput={handleEditorInput}
+                onMouseEnter={handleEditorPointer}
+                onMouseLeave={() => setActiveTooltip(null)}
+                onMouseMove={handleEditorPointer}
+                onPaste={handleEditorPaste}
+                role="textbox"
+                spellCheck="false"
+                suppressContentEditableWarning
+              />
+            </div>
           ) : (
             <div className="easier-pane">
               <div className="easier-controls">
@@ -814,7 +1150,7 @@ function App() {
                   onChange={handleTargetLevelChange}
                   disabled={isSimplifying || !text.trim()}
                 >
-                  {targetLevelOptions.map((level) => (
+                  {config.targetLevels.map((level) => (
                     <option key={level} value={level}>
                       {level}
                     </option>
@@ -836,25 +1172,31 @@ function App() {
                 </button>
               </div>
 
-              {!easierText ? (
-                <div className="easier-output empty-output" lang="ja">
+              {!hasVisibleEasierText ? (
+                <div className="easier-output empty-output" dir={config.dir} lang={config.lang}>
                   <p className="empty-state">
                     {pendingSimplifyLevel
                       ? "Tokenizing the source text first…"
                       : isSimplifying
                         ? `Starting a ${targetLevel} version…`
-                        : "Paste source text, then open this tab to generate a simpler version."}
+                        : language === "hebrew" && easierText.trim()
+                          ? "No new Hebrew words outside the source text were generated."
+                          : text.trim()
+                            ? "Choose a target level, then click Generate to create a simpler version."
+                            : "Paste source text, then use this tab to generate a simpler version."}
                   </p>
                 </div>
-              ) : isSimplifying ? (
-                <div className="easier-output empty-output streaming-output" lang="ja">
-                  <p>{easierText}</p>
+              ) : language === "hebrew" || isSimplifying ? (
+                <div className="easier-output empty-output streaming-output" dir={config.dir} lang={config.lang}>
+                  <p>{visibleEasierText}</p>
                 </div>
               ) : (
-                <div className="editor-frame easier-output" lang="ja">
+                <div className="editor-frame easier-output" dir={config.dir} lang={config.lang}>
                   <div
                     ref={easierEditorRef}
                     className="study-editor"
+                    dir={config.dir}
+                    lang={config.lang}
                     onBlur={() => setActiveTooltip(null)}
                     onFocus={handleEditorPointer}
                     onMouseEnter={handleEditorPointer}
@@ -864,7 +1206,7 @@ function App() {
                   />
                 </div>
               )}
-              {easierText && easierTextSource !== text.trim() && (
+              {easierText && easierTextSource !== normalizeSourceForLanguage(text, language) && (
                 <p className="easier-note">
                   Source text changed. Regenerate to refresh this version.
                 </p>
@@ -873,11 +1215,11 @@ function App() {
           )}
           {activeTooltip && (
             <div
-              className={`token-popover is-visible ${activeTooltip.level ? `jlpt-n${activeTooltip.level}` : "dictionary-token"}`}
+              className={`token-popover is-visible ${activeTooltip.level ? config.classForLevel(activeTooltip.level) : "dictionary-token"}`}
               role="tooltip"
               style={{ left: activeTooltip.left, top: activeTooltip.top }}
             >
-              <strong>
+              <strong dir={config.dir}>
                 {activeTooltip.word}
                 {activeTooltip.baseForm &&
                   activeTooltip.baseForm !== activeTooltip.word && (
@@ -891,12 +1233,12 @@ function App() {
                   )}
                 {activeTooltip.level && (
                   <span className="popover-level">
-                    {jlptLabels[activeTooltip.level]}
+                    {activeTooltip.level}
                   </span>
                 )}
               </strong>
               <span>
-                {translations[activeTooltip.lookupWord] ?? "Looking up…"}
+                {activeTooltip.gloss ?? translations[activeTooltip.lookupWord] ?? "Looking up…"}
               </span>
             </div>
           )}
@@ -908,6 +1250,32 @@ function App() {
             <h2>Difficulty map</h2>
           </div>
 
+          {showWordList && (
+            <section className="word-list" aria-label={`${config.scaleLabel} words found`}>
+              <div className="chart-header">
+                <span>{config.scaleLabel} words found</span>
+                <strong>{listedTokens.length}</strong>
+              </div>
+              {listedTokens.length > 0 ? (
+                <div className="word-list-items">
+                  {listedTokens.slice(0, 14).map((token) => (
+                    <div className="word-list-row" key={`${token.word}-${token.level}-${token.detail ?? ""}`}>
+                      <span className={`word-list-level ${config.classForLevel(token.level)}`}>
+                        {token.level}
+                      </span>
+                      <strong dir={config.dir}>{token.word}</strong>
+                      {token.detail && <small>{token.detail}</small>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="word-list-empty">
+                  No {config.scaleLabel} list words found in the current text yet.
+                </p>
+              )}
+            </section>
+          )}
+
           <section
             className="difficulty-card"
             aria-label="Text difficulty score"
@@ -915,31 +1283,32 @@ function App() {
             <span className="difficulty-label">{difficultyLabel}</span>
             <strong>{stats.difficultyScore}</strong>
             <small>
-              Vocabulary percentiles plus kanji density, sentence length, and
-              grammar signals
+              {language === "hebrew"
+                ? "Vocabulary percentiles from the Hebrew CEFR list plus sentence-length signals"
+                : "Vocabulary percentiles plus kanji density, sentence length, and grammar signals"}
             </small>
           </section>
 
-          <section className="jlpt-chart" aria-label="JLPT word distribution">
+          <section className="jlpt-chart" aria-label={`${config.scaleLabel} word distribution`}>
             <div className="chart-header">
-              <span>JLPT / frequency content words</span>
+              <span>{config.listedLabel}</span>
               <strong>
-                {stats.jlptWordCount} / {stats.frequencyWordCount}
+                {stats.leveledWordCount} / {stats.listedWordCount}
               </strong>
             </div>
-            {[1, 2, 3, 4, 5].map((level) => {
-              const count = stats.jlptDistribution[level];
+            {config.chartLevels.map((level) => {
+              const count = stats.distribution[level];
               const width = count
-                ? `${Math.max(4, (count / maxJlptCount) * 100)}%`
+                ? `${Math.max(4, (count / maxLevelCount) * 100)}%`
                 : "0%";
               return (
                 <div className="chart-row" key={level}>
-                  <span className={`chart-level jlpt-n${level}`}>
-                    {jlptLabels[level]}
+                  <span className={`chart-level ${config.classForLevel(level)}`}>
+                    {level}
                   </span>
                   <div className="chart-track" aria-hidden="true">
                     <span
-                      className={`chart-bar jlpt-n${level}`}
+                      className={`chart-bar ${config.classForLevel(level)}`}
                       style={{ width }}
                     />
                   </div>

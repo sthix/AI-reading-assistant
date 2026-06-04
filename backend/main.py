@@ -9,7 +9,7 @@ import urllib.request
 import zipfile
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from langchain.chat_models import init_chat_model
 from sudachipy import dictionary as sudachi_dictionary
@@ -20,8 +20,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 
+Language = Literal["japanese", "hebrew"]
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
+    language: Language = "japanese"
 
 
 class ChatResponse(BaseModel):
@@ -34,15 +38,18 @@ class StatsRequest(BaseModel):
 
 class AnnotateRequest(BaseModel):
     text: str = ""
+    language: Language = "japanese"
 
 
 class TranslationRequest(BaseModel):
     word: str = Field(..., min_length=1)
+    language: Language = "japanese"
 
 
 class SimplifyRequest(BaseModel):
     text: str = Field(..., min_length=1)
-    target_level: str = Field(..., pattern=r"^N[1-5]$")
+    target_level: str = Field(..., pattern=r"^(N[1-5]|A1|A2|B1|B2|C1)$")
+    language: Language = "japanese"
 
 
 class SimplifyResponse(BaseModel):
@@ -58,6 +65,8 @@ class AnnotatedToken(BaseModel):
     is_content: bool = False
     is_proper_noun: bool = False
     jlpt_level: int | None = None
+    cefr_level: str | None = None
+    english_gloss: str | None = None
     reading: str | None = None
     frequency_rank: int | None = None
     kanji_levels: list[int] = Field(default_factory=list)
@@ -87,12 +96,12 @@ class UploadResponse(BaseModel):
     stats: StatsResponse
 
 
-@lru_cache(maxsize=1)
-def get_rag_graph():
-    """Import and cache the compiled RAG graph once per backend process."""
-    from RAG import graph
+@lru_cache(maxsize=2)
+def get_rag_graph(language: Language):
+    """Import and cache the compiled RAG graph for the selected language."""
+    from RAG import graph_hebrew, graph_japanese
 
-    return graph
+    return graph_hebrew if language == "hebrew" else graph_japanese
 
 
 @lru_cache(maxsize=1)
@@ -222,9 +231,64 @@ def get_jlpt_kanji() -> dict[str, int]:
     return kanji_levels
 
 
+@lru_cache(maxsize=1)
+def get_hebrew_vocab() -> dict[str, dict[str, int | str]]:
+    """Load the Hebrew CEFR list for annotation and dictionary lookups."""
+    vocab_path = Path(__file__).parent.parent / "documents" / "hebrew_cefr_assigned_1.csv"
+    vocab: dict[str, dict[str, int | str]] = {}
+
+    if not vocab_path.exists():
+        return vocab
+
+    with vocab_path.open(encoding="utf-8-sig", newline="") as file:
+        for row in csv.DictReader(file):
+            word = (row.get("hebrew") or "").strip()
+            if not word:
+                continue
+            try:
+                rank = int(row.get("rank") or 0)
+            except ValueError:
+                rank = 0
+            entry = {
+                "rank": rank,
+                "hebrew": word,
+                "english_gloss": (row.get("english_gloss") or "").strip(),
+                "matched_word": (row.get("matched_word") or "").strip(),
+                "cefr_level": (row.get("cefr_level") or "").strip(),
+            }
+            vocab[word] = entry
+            vocab[normalize_hebrew_word(word)] = entry
+
+    return vocab
+
+
 KANJI_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 HIRAGANA_ONLY_RE = re.compile(r"[\u3040-\u309fー]+")
 JAPANESE_RUN_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤]+")
+HEBREW_RUN_RE = re.compile(r"[\u0590-\u05ff]+(?:[׳'״\"-][\u0590-\u05ff]+)*")
+HEBREW_MARKS_RE = re.compile(r"[\u0591-\u05bd\u05bf-\u05c7]")
+HEBREW_BIDI_CONTROLS_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+HEBREW_TABLE_RULE_RE = re.compile(r"^\s*[|:;\-–—\s]+\s*$", re.MULTILINE)
+CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1"]
+
+
+def normalize_hebrew_word(word: str) -> str:
+    """Strip Hebrew niqqud/cantillation marks for CSV lookup."""
+    return HEBREW_MARKS_RE.sub("", word).replace("־", "-").strip()
+
+
+def normalize_text_for_language(text: str, language: Language) -> str:
+    """Flatten Hebrew layout whitespace so generated/annotated text renders as prose."""
+    if language != "hebrew":
+        return text.strip()
+
+    normalized = HEBREW_BIDI_CONTROLS_RE.sub("", text)
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"(^|\s)\d+($|\s)", " ", normalized)
+    normalized = HEBREW_TABLE_RULE_RE.sub(" ", normalized)
+    normalized = re.sub(r"[|]+", " ", normalized)
+    normalized = re.sub(r"(?:^|\n)\s*[-*•]+\s*", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
 JITENDEX_URL = (
     "https://github.com/stephenmk/stephenmk.github.io/releases/latest/download/"
     "jitendex-yomitan.zip"
@@ -233,7 +297,7 @@ JITENDEX_ZIP_PATH = Path(__file__).parent / "data" / "jitendex-yomitan.zip"
 JITENDEX_CACHE_PATH = Path(__file__).parent / "data" / "jitendex-cache.json"
 
 
-def build_annotations(text: str) -> AnnotationResponse:
+def build_japanese_annotations(text: str) -> AnnotationResponse:
     vocab = get_jlpt_vocab()
     frequencies = get_frequency_vocab()
     kanji_lookup = get_jlpt_kanji()
@@ -342,6 +406,44 @@ def build_annotations(text: str) -> AnnotationResponse:
     return AnnotationResponse(tokens=tokens)
 
 
+def build_hebrew_annotations(text: str) -> AnnotationResponse:
+    """Tokenize Hebrew text and annotate entries from the CEFR vocabulary list."""
+    vocab = get_hebrew_vocab()
+    tokens: list[AnnotatedToken] = []
+    cursor = 0
+
+    for match in HEBREW_RUN_RE.finditer(text):
+        if match.start() > cursor:
+            tokens.append(AnnotatedToken(text=text[cursor:match.start()]))
+
+        surface = match.group()
+        normalized_surface = normalize_hebrew_word(surface)
+        entry = vocab.get(surface) or vocab.get(normalized_surface)
+        tokens.append(
+            AnnotatedToken(
+                text=surface,
+                base_form=normalized_surface if normalized_surface != surface else None,
+                part_of_speech="word" if entry else None,
+                is_content=entry is not None,
+                cefr_level=str(entry["cefr_level"]) if entry else None,
+                english_gloss=str(entry["english_gloss"]) if entry else None,
+                frequency_rank=int(entry["rank"]) if entry else None,
+            )
+        )
+        cursor = match.end()
+
+    if cursor < len(text):
+        tokens.append(AnnotatedToken(text=text[cursor:]))
+
+    return AnnotationResponse(tokens=tokens)
+
+
+def build_annotations(text: str, language: Language = "japanese") -> AnnotationResponse:
+    if language == "hebrew":
+        return build_hebrew_annotations(text)
+    return build_japanese_annotations(text)
+
+
 def ensure_jitendex_zip() -> Path:
     """Download the Jitendex Yomitan dictionary once and reuse it locally."""
     if not JITENDEX_ZIP_PATH.exists():
@@ -447,6 +549,20 @@ def translate_japanese_word(word: str) -> str:
     return "; ".join(glosses)[:160]
 
 
+@lru_cache(maxsize=512)
+def translate_hebrew_word(word: str) -> str:
+    """Translate a Hebrew word using the local Hebrew CEFR CSV list."""
+    entry = get_hebrew_vocab().get(word) or get_hebrew_vocab().get(normalize_hebrew_word(word))
+    if not entry:
+        return "Translation unavailable"
+
+    gloss = str(entry.get("english_gloss") or "").strip()
+    level = str(entry.get("cefr_level") or "").strip()
+    if gloss and level:
+        return f"{gloss} ({level})"
+    return gloss or "Translation unavailable"
+
+
 def build_stats(text: str) -> StatsResponse:
     return StatsResponse(
         characters=len(text),
@@ -456,10 +572,24 @@ def build_stats(text: str) -> StatsResponse:
     )
 
 
-SIMPLIFICATION_CACHE: dict[tuple[str, str], str] = {}
+SIMPLIFICATION_CACHE: dict[tuple[str, str, str], str] = {}
 
 
-def build_simplification_prompt(source_text: str, target_level: str) -> str:
+def validate_target_level(language: Language, target_level: str) -> None:
+    if language == "japanese" and not re.fullmatch(r"N[1-5]", target_level):
+        raise HTTPException(status_code=400, detail="Japanese mode requires a JLPT target level N1-N5.")
+    if language == "hebrew" and target_level not in CEFR_LEVELS:
+        raise HTTPException(status_code=400, detail="Hebrew mode requires a CEFR target level A1-C1.")
+
+
+def build_simplification_prompt(source_text: str, target_level: str, language: Language) -> str:
+    if language == "hebrew":
+        return f"""
+Rewrite this Hebrew text for CEFR {target_level}. Keep meaning, names, numbers, and tone. Use natural Hebrew vocabulary and grammar appropriate for CEFR {target_level} on the A1-C1 scale. Return only Hebrew text, no notes, no verse numbers, no tables, no columns, and no one-word-per-line formatting. Use normal paragraph formatting.
+
+{source_text}
+""".strip()
+
     return f"""
 Rewrite this Japanese text for JLPT {target_level}. Keep meaning, names, numbers, and tone. Use natural {target_level}-level vocabulary/grammar. Return only Japanese text, no notes.
 
@@ -468,25 +598,25 @@ Rewrite this Japanese text for JLPT {target_level}. Keep meaning, names, numbers
 
 
 @lru_cache(maxsize=128)
-def simplify_text_cached(source_text: str, target_level: str) -> str:
-    """Generate and cache simplified variants by exact source text and target level."""
-    prompt = build_simplification_prompt(source_text, target_level)
+def simplify_text_cached(source_text: str, target_level: str, language: Language) -> str:
+    """Generate and cache simplified variants by exact source text, target level, and language."""
+    prompt = build_simplification_prompt(source_text, target_level, language)
     model = get_simplification_model()
     response = model.invoke([{"role": "user", "content": prompt}])
-    simplified_text = response.content.strip()
-    SIMPLIFICATION_CACHE[(source_text, target_level)] = simplified_text
+    simplified_text = normalize_text_for_language(response.content, language)
+    SIMPLIFICATION_CACHE[(source_text, target_level, language)] = simplified_text
     return simplified_text
 
 
-def stream_simplified_text(source_text: str, target_level: str):
+def stream_simplified_text(source_text: str, target_level: str, language: Language):
     """Yield simplified text chunks from Ollama as soon as tokens arrive."""
-    cached_text = SIMPLIFICATION_CACHE.get((source_text, target_level))
+    cached_text = SIMPLIFICATION_CACHE.get((source_text, target_level, language))
     if cached_text is not None:
         for index in range(0, len(cached_text), 8):
             yield cached_text[index : index + 8]
         return
 
-    prompt = build_simplification_prompt(source_text, target_level)
+    prompt = build_simplification_prompt(source_text, target_level, language)
     ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
     payload = json.dumps(
         {
@@ -517,7 +647,9 @@ def stream_simplified_text(source_text: str, target_level: str):
             chunks.append(content)
             yield content
 
-    SIMPLIFICATION_CACHE[(source_text, target_level)] = "".join(chunks).strip()
+    SIMPLIFICATION_CACHE[(source_text, target_level, language)] = normalize_text_for_language(
+        "".join(chunks), language
+    )
 
 
 app = FastAPI(title="Language Assistant API")
@@ -527,6 +659,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -546,7 +680,7 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Message must not be empty.")
 
     def invoke_rag() -> str:
-        graph = get_rag_graph()
+        graph = get_rag_graph(request.language)
         result = graph.invoke({"messages": [{"role": "user", "content": message}]})
         return result["messages"][-1].content
 
@@ -565,18 +699,19 @@ def stats(request: StatsRequest):
 
 @app.post("/annotate", response_model=AnnotationResponse)
 def annotate(request: AnnotateRequest):
-    return build_annotations(request.text)
+    return build_annotations(request.text, request.language)
 
 
 @app.post("/simplify", response_model=SimplifyResponse)
 async def simplify(request: SimplifyRequest):
-    source_text = request.text.strip()
+    source_text = normalize_text_for_language(request.text, request.language)
     if not source_text:
         raise HTTPException(status_code=400, detail="Text must not be empty.")
+    validate_target_level(request.language, request.target_level)
 
     try:
         simplified_text = await asyncio.to_thread(
-            simplify_text_cached, source_text, request.target_level
+            simplify_text_cached, source_text, request.target_level, request.language
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -584,7 +719,7 @@ async def simplify(request: SimplifyRequest):
     if not simplified_text:
         raise HTTPException(status_code=500, detail="Simplification returned no text.")
 
-    annotations = build_annotations(simplified_text).tokens
+    annotations = build_annotations(simplified_text, request.language).tokens
     return SimplifyResponse(
         text=simplified_text,
         target_level=request.target_level,
@@ -594,19 +729,20 @@ async def simplify(request: SimplifyRequest):
 
 @app.post("/simplify/stream")
 async def simplify_stream(request: SimplifyRequest):
-    source_text = request.text.strip()
+    source_text = normalize_text_for_language(request.text, request.language)
     if not source_text:
         raise HTTPException(status_code=400, detail="Text must not be empty.")
+    validate_target_level(request.language, request.target_level)
 
     async def event_stream():
         simplified_chunks: list[str] = []
         try:
-            for chunk in stream_simplified_text(source_text, request.target_level):
+            for chunk in stream_simplified_text(source_text, request.target_level, request.language):
                 simplified_chunks.append(chunk)
                 yield json.dumps({"type": "chunk", "text": chunk}, ensure_ascii=False) + "\n"
                 await asyncio.sleep(0.025)
 
-            simplified_text = "".join(simplified_chunks).strip()
+            simplified_text = normalize_text_for_language("".join(simplified_chunks), request.language)
             if not simplified_text:
                 yield json.dumps(
                     {"type": "error", "detail": "Simplification returned no text."},
@@ -614,7 +750,10 @@ async def simplify_stream(request: SimplifyRequest):
                 ) + "\n"
                 return
 
-            annotations = [token.model_dump() for token in build_annotations(simplified_text).tokens]
+            annotations = [
+                token.model_dump()
+                for token in build_annotations(simplified_text, request.language).tokens
+            ]
             yield json.dumps(
                 {
                     "type": "done",
@@ -641,11 +780,16 @@ async def translate(request: TranslationRequest):
         raise HTTPException(status_code=400, detail="Word must not be empty.")
 
     try:
-        translation = await asyncio.to_thread(translate_japanese_word, word)
+        if request.language == "hebrew":
+            translation = await asyncio.to_thread(translate_hebrew_word, word)
+            reading = None
+        else:
+            translation = await asyncio.to_thread(translate_japanese_word, word)
+            reading = get_jitendex_readings().get(word)
     except Exception:
         translation = "Translation unavailable"
+        reading = None
 
-    reading = get_jitendex_readings().get(word)
     return TranslationResponse(word=word, translation=translation, reading=reading)
 
 

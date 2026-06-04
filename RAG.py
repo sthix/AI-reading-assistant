@@ -1,4 +1,5 @@
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -15,208 +16,199 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 dotenv.load_dotenv()
 
-# ---------------------------------------------------------------------------
-# 1. Preprocess documents — load language data
-# ---------------------------------------------------------------------------
+Language = Literal["japanese", "hebrew"]
 
-documents_dir = Path(__file__).parent / "documents"
+BASE_DIR = Path(__file__).parent
+DOCUMENTS_DIR = BASE_DIR / "documents"
 
-document_paths = list(documents_dir.glob("*.csv"))
-
-docs = [CSVLoader(path).load() for path in document_paths]
-docs_list = [item for sublist in docs for item in sublist]
-
-text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-    chunk_size=250, chunk_overlap=50
-)
-doc_splits = text_splitter.split_documents(docs_list)
-
-# ---------------------------------------------------------------------------
-# 2. Create a retriever tool
-# ---------------------------------------------------------------------------
+LANGUAGE_CONFIG: dict[str, dict[str, object]] = {
+    "japanese": {
+        "label": "Japanese",
+        "document_paths": [
+            DOCUMENTS_DIR / "JLPT_vocab_ALL.csv",
+            DOCUMENTS_DIR / "JLPT_kanji_ALL.csv",
+        ],
+        "persist_directory": BASE_DIR / "chroma_db_japanese",
+        "tool_name": "retrieve_japanese_info",
+        "tool_description": (
+            "Search Japanese JLPT vocabulary and kanji entries by word, reading, "
+            "English meaning, or JLPT level. Rows include Japanese form, reading, "
+            "meaning, and JLPT difficulty N5-N1."
+        ),
+        "document_kinds": "Japanese vocabulary, readings, meanings, kanji, and JLPT N5-N1 levels",
+        "mentor_prompt": (
+            "You are a Japanese vocabulary mentor. Use the retrieved JLPT rows to "
+            "answer the learner's question. If relevant, include the Japanese word, "
+            "reading, concise English meaning, and JLPT difficulty level N5-N1."
+        ),
+        "rewrite_prompt": "Formulate an improved Japanese JLPT vocabulary search question:",
+    },
+    "hebrew": {
+        "label": "Hebrew",
+        "document_paths": [DOCUMENTS_DIR / "hebrew_cefr_assigned_1.csv"],
+        "persist_directory": BASE_DIR / "chroma_db_hebrew",
+        "tool_name": "retrieve_hebrew_info",
+        "tool_description": (
+            "Search Hebrew vocabulary entries by Hebrew word or English meaning. "
+            "Rows come from hebrew_cefr_assigned_1.csv and include rank, Hebrew word, "
+            "English gloss, matched word, and CEFR level A1-C1."
+        ),
+        "document_kinds": "Hebrew vocabulary, English glosses, and CEFR A1-C1 levels",
+        "mentor_prompt": (
+            "You are a Hebrew vocabulary mentor. Use the retrieved Hebrew CEFR list "
+            "rows to answer the learner's question. If relevant, include the Hebrew "
+            "word, concise English gloss, and CEFR difficulty level A1-C1."
+        ),
+        "rewrite_prompt": "Formulate an improved Hebrew CEFR vocabulary search question:",
+    },
+}
 
 embedding_model = OllamaEmbeddings(model="embeddinggemma")
 
-persist_directory = os.path.join(os.path.dirname(__file__), "chroma_db")
 
-if os.path.exists(persist_directory) and os.listdir(persist_directory):
-    vectorstore = Chroma(
-        persist_directory=persist_directory,
-        embedding_function=embedding_model,
+def load_csv_documents(language: Language):
+    config = LANGUAGE_CONFIG[language]
+    paths = config["document_paths"]
+    docs = []
+    for path in paths:  # type: ignore[assignment]
+        document_path = Path(path)
+        if not document_path.exists():
+            raise FileNotFoundError(f"Missing {config['label']} RAG document: {document_path}")
+        docs.extend(CSVLoader(document_path).load())
+    return docs
+
+
+@lru_cache(maxsize=2)
+def get_retriever(language: Language):
+    docs_list = load_csv_documents(language)
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=250, chunk_overlap=50
     )
-else:
-    vectorstore = Chroma.from_documents(
-        documents=doc_splits,
-        embedding=embedding_model,
-        persist_directory=persist_directory,
-    )
+    doc_splits = text_splitter.split_documents(docs_list)
 
-retriever = vectorstore.as_retriever()
-
-
-@tool
-def retrieve_jlpt_info(query: str) -> str:
-    """Search and return JLPT vocabulary entries matching the query."""
-    docs = retriever.invoke(query)
-    return "\n\n".join([doc.page_content for doc in docs])
-
-
-retriever_tool = retrieve_jlpt_info
-
-
-# ---------------------------------------------------------------------------
-# 3. Generate query — LLM decides whether to retrieve or respond directly
-# ---------------------------------------------------------------------------
-
-response_model = init_chat_model(
-    "kimi-k2.6:cloud", model_provider="ollama", temperature=0
-)
-
-
-def generate_query_or_respond(state: MessagesState):
-    """Call the model to generate a response based on the current state.
-    Given the question, it will decide to retrieve using the retriever tool,
-    or simply respond to the user.
-    """
-    response = response_model.bind_tools([retriever_tool]).invoke(state["messages"])
-    return {"messages": [response]}
-
-
-# ---------------------------------------------------------------------------
-# 4. Grade documents — check if retrieved content is relevant
-# ---------------------------------------------------------------------------
-
-GRADE_PROMPT = (
-    "You are a grader assessing relevance of a retrieved document to a user question.\n"
-    "Here is the retrieved document:\n\n{context}\n\n"
-    "Here is the user question: {question}\n"
-    "If the document contains keyword(s) or semantic meaning related to the user question, "
-    "grade it as relevant.\n"
-    "Respond with exactly one word: yes or no."
-)
-
-
-grader_model = init_chat_model(
-    "kimi-k2.6:cloud", model_provider="ollama", temperature=0
-)
-
-
-def grade_documents(
-    state: MessagesState,
-) -> Literal["generate_answer", "rewrite_question"]:
-    """Determine whether the retrieved documents are relevant to the question."""
-    question = state["messages"][0].content
-    context = state["messages"][-1].content
-
-    prompt = GRADE_PROMPT.format(question=question, context=context)
-    response = grader_model.invoke([{"role": "user", "content": prompt}])
-    score = response.content.strip().lower()
-
-    if score.startswith("yes"):
-        return "generate_answer"
+    persist_directory = str(LANGUAGE_CONFIG[language]["persist_directory"])
+    if os.path.exists(persist_directory) and os.listdir(persist_directory):
+        vectorstore = Chroma(
+            persist_directory=persist_directory,
+            embedding_function=embedding_model,
+        )
     else:
+        vectorstore = Chroma.from_documents(
+            documents=doc_splits,
+            embedding=embedding_model,
+            persist_directory=persist_directory,
+        )
+
+    return vectorstore.as_retriever(search_kwargs={"k": 6})
+
+
+@lru_cache(maxsize=2)
+def build_graph(language: Language):
+    """Compile a LangGraph RAG workflow for Japanese or Hebrew."""
+    config = LANGUAGE_CONFIG[language]
+    retriever = get_retriever(language)
+
+    @tool
+    def retrieve_language_info(query: str) -> str:
+        """Search the selected language vocabulary dataset."""
+        docs = retriever.invoke(query)
+        return "\n\n".join([doc.page_content for doc in docs])
+
+    retrieve_language_info.name = str(config["tool_name"])
+    retrieve_language_info.description = str(config["tool_description"])
+    retriever_tool = retrieve_language_info
+
+    response_model = init_chat_model(
+        "kimi-k2.6:cloud", model_provider="ollama", temperature=0
+    )
+    grader_model = init_chat_model(
+        "kimi-k2.6:cloud", model_provider="ollama", temperature=0
+    )
+
+    def generate_query_or_respond(state: MessagesState):
+        response = response_model.bind_tools([retriever_tool]).invoke(state["messages"])
+        return {"messages": [response]}
+
+    grade_prompt = (
+        "You are a grader assessing relevance of a retrieved vocabulary row "
+        "to a user question.\n"
+        "Here is the retrieved document:\n\n{context}\n\n"
+        "Here is the user question: {question}\n"
+        f"If the document contains information related to {config['document_kinds']} "
+        "and the user question, grade it as relevant.\n"
+        "Respond with exactly one word: yes or no."
+    )
+
+    def grade_documents(
+        state: MessagesState,
+    ) -> Literal["generate_answer", "rewrite_question"]:
+        question = state["messages"][0].content
+        context = state["messages"][-1].content
+        prompt = grade_prompt.format(question=question, context=context)
+        response = grader_model.invoke([{"role": "user", "content": prompt}])
+        score = response.content.strip().lower()
+        if score.startswith("yes"):
+            return "generate_answer"
         return "rewrite_question"
 
+    rewrite_prompt = (
+        "Look at the input and infer the intended vocabulary lookup.\n"
+        "Here is the initial question:"
+        "\n ------- \n"
+        "{question}"
+        "\n ------- \n"
+        f"{config['rewrite_prompt']}"
+    )
 
-# ---------------------------------------------------------------------------
-# 5. Rewrite question — improve query when retrieval is irrelevant
-# ---------------------------------------------------------------------------
+    def rewrite_question(state: MessagesState):
+        question = state["messages"][0].content
+        prompt = rewrite_prompt.format(question=question)
+        response = response_model.invoke([{"role": "user", "content": prompt}])
+        return {"messages": [HumanMessage(content=response.content)]}
 
-REWRITE_PROMPT = (
-    "Look at the input and try to reason about the underlying semantic intent / meaning.\n"
-    "Here is the initial question:"
-    "\n ------- \n"
-    "{question}"
-    "\n ------- \n"
-    "Formulate an improved question:"
-)
+    generate_prompt = (
+        f"{config['mentor_prompt']} "
+        "If you don't know the answer from the context, say that you don't know. "
+        "Use three sentences maximum and keep the answer concise.\n"
+        "Question: {question}\n"
+        "Context: {context}"
+    )
 
+    def generate_answer(state: MessagesState):
+        question = state["messages"][0].content
+        context = state["messages"][-1].content
+        prompt = generate_prompt.format(question=question, context=context)
+        response = response_model.invoke([{"role": "user", "content": prompt}])
+        return {"messages": [response]}
 
-def rewrite_question(state: MessagesState):
-    """Rewrite the original user question."""
-    messages = state["messages"]
-    question = messages[0].content
-    prompt = REWRITE_PROMPT.format(question=question)
-    response = response_model.invoke([{"role": "user", "content": prompt}])
-    return {"messages": [HumanMessage(content=response.content)]}
+    workflow = StateGraph(MessagesState)
+    workflow.add_node(generate_query_or_respond)
+    workflow.add_node("retrieve", ToolNode([retriever_tool]))
+    workflow.add_node(rewrite_question)
+    workflow.add_node(generate_answer)
 
+    workflow.add_edge(START, "generate_query_or_respond")
+    workflow.add_conditional_edges(
+        "generate_query_or_respond",
+        tools_condition,
+        {"tools": "retrieve", END: END},
+    )
+    workflow.add_conditional_edges("retrieve", grade_documents)
+    workflow.add_edge("generate_answer", END)
+    workflow.add_edge("rewrite_question", "generate_query_or_respond")
 
-# ---------------------------------------------------------------------------
-# 6. Generate answer — final answer from question + retrieved context
-# ---------------------------------------------------------------------------
-
-GENERATE_PROMPT = (
-    "You are an assistant for question-answering tasks about Japanese vocabulary. "
-    "Use the following pieces of retrieved context to answer the question. "
-    "If you don't know the answer, just say that you don't know. "
-    "Use three sentences maximum and keep the answer concise.\n"
-    "Question: {question} \n"
-    "Context: {context}"
-)
-
-
-def generate_answer(state: MessagesState):
-    """Generate an answer."""
-    question = state["messages"][0].content
-    context = state["messages"][-1].content
-    prompt = GENERATE_PROMPT.format(question=question, context=context)
-    response = response_model.invoke([{"role": "user", "content": prompt}])
-    return {"messages": [response]}
-
-
-# ---------------------------------------------------------------------------
-# 7. Assemble the graph
-# ---------------------------------------------------------------------------
-
-workflow = StateGraph(MessagesState)
-
-# Define the nodes we will cycle between
-workflow.add_node(generate_query_or_respond)
-workflow.add_node("retrieve", ToolNode([retriever_tool]))
-workflow.add_node(rewrite_question)
-workflow.add_node(generate_answer)
-
-workflow.add_edge(START, "generate_query_or_respond")
-
-# Decide whether to retrieve
-workflow.add_conditional_edges(
-    "generate_query_or_respond",
-    tools_condition,
-    {
-        "tools": "retrieve",
-        END: END,
-    },
-)
-
-# Edges taken after the retrieval node is called
-workflow.add_conditional_edges(
-    "retrieve",
-    grade_documents,
-)
-workflow.add_edge("generate_answer", END)
-workflow.add_edge("rewrite_question", "generate_query_or_respond")
-
-# Compile
-graph = workflow.compile()
+    return workflow.compile()
 
 
-# ---------------------------------------------------------------------------
-# 8. Run the agentic RAG
-# ---------------------------------------------------------------------------
+graph_japanese = build_graph("japanese")
+graph_hebrew = build_graph("hebrew")
+graph = graph_japanese
+
 
 if __name__ == "__main__":
-    question = (
-        "What is the meaning of the Japanese word 赤ちゃん, and what is its JLPT level?"
-    )
+    question = "What is the meaning of שלום, and what is its CEFR level?"
     print(f"Question: {question}\n")
-
-    for chunk in graph.stream(
-        {
-            "messages": [
-                {"role": "user", "content": question},
-            ]
-        }
-    ):
+    for chunk in graph_hebrew.stream({"messages": [{"role": "user", "content": question}]}):
         for node, update in chunk.items():
             print(f"--- Update from node: {node} ---")
             update["messages"][-1].pretty_print()
