@@ -234,7 +234,7 @@ def get_jlpt_kanji() -> dict[str, int]:
 @lru_cache(maxsize=1)
 def get_hebrew_vocab() -> dict[str, dict[str, int | str]]:
     """Load the Hebrew CEFR list for annotation and dictionary lookups."""
-    vocab_path = Path(__file__).parent.parent / "documents" / "hebrew_cefr_assigned_1.csv"
+    vocab_path = Path(__file__).parent.parent / "documents" / "hebrew_cefr_final.csv"
     vocab: dict[str, dict[str, int | str]] = {}
 
     if not vocab_path.exists():
@@ -242,17 +242,17 @@ def get_hebrew_vocab() -> dict[str, dict[str, int | str]]:
 
     with vocab_path.open(encoding="utf-8-sig", newline="") as file:
         for row in csv.DictReader(file):
-            word = (row.get("hebrew") or "").strip()
+            word = (row.get("Hebrew") or row.get("hebrew") or "").strip()
             if not word:
                 continue
             try:
-                rank = int(row.get("rank") or 0)
+                rank = int(row.get("Rank") or row.get("rank") or 0)
             except ValueError:
                 rank = 0
             entry = {
                 "rank": rank,
                 "hebrew": word,
-                "english_gloss": (row.get("english_gloss") or "").strip(),
+                "english_gloss": (row.get("English") or row.get("english_gloss") or "").strip(),
                 "matched_word": (row.get("matched_word") or "").strip(),
                 "cefr_level": (row.get("cefr_level") or "").strip(),
             }
@@ -278,7 +278,26 @@ def normalize_hebrew_word(word: str) -> str:
 
 
 def normalize_text_for_language(text: str, language: Language) -> str:
-    """Flatten Hebrew layout whitespace so generated/annotated text renders as prose."""
+    """Flatten generated layout whitespace so annotated text renders as prose."""
+    if language == "japanese":
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = HEBREW_TABLE_RULE_RE.sub(" ", normalized)
+        normalized = re.sub(r"[|]+", " ", normalized)
+        normalized = re.sub(r"(?:^|\n)\s*[-*•]+\s*", " ", normalized)
+
+        japanese_inline_pattern = (
+            r"([\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤。、！？「」『』（）［］【】・…])"
+            r"\s+"
+            r"([\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤。、！？「」『』（）［］【】・…])"
+        )
+        while True:
+            compacted = re.sub(japanese_inline_pattern, r"\1\2", normalized)
+            if compacted == normalized:
+                break
+            normalized = compacted
+
+        return re.sub(r"[ \t\f\v]+", " ", normalized).strip()
+
     if language != "hebrew":
         return text.strip()
 
@@ -591,7 +610,7 @@ Rewrite this Hebrew text for CEFR {target_level}. Keep meaning, names, numbers, 
 """.strip()
 
     return f"""
-Rewrite this Japanese text for JLPT {target_level}. Keep meaning, names, numbers, and tone. Use natural {target_level}-level vocabulary/grammar. Return only Japanese text, no notes.
+Rewrite this Japanese text for JLPT {target_level}. Keep meaning, names, numbers, and tone. Use natural {target_level}-level vocabulary/grammar. Return only Japanese text, no notes, no tables, no columns, and no one-word-per-line formatting. Use normal Japanese paragraph formatting without spaces between Japanese words.
 
 {source_text}
 """.strip()

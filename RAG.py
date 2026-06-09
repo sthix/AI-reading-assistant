@@ -45,13 +45,13 @@ LANGUAGE_CONFIG: dict[str, dict[str, object]] = {
     },
     "hebrew": {
         "label": "Hebrew",
-        "document_paths": [DOCUMENTS_DIR / "hebrew_cefr_assigned_1.csv"],
-        "persist_directory": BASE_DIR / "chroma_db_hebrew",
+        "document_paths": [DOCUMENTS_DIR / "hebrew_cefr_final.csv"],
+        "persist_directory": BASE_DIR / "chroma_db_hebrew_final",
         "tool_name": "retrieve_hebrew_info",
         "tool_description": (
             "Search Hebrew vocabulary entries by Hebrew word or English meaning. "
-            "Rows come from hebrew_cefr_assigned_1.csv and include rank, Hebrew word, "
-            "English gloss, matched word, and CEFR level A1-C1."
+            "Rows come from hebrew_cefr_final.csv and include rank, Hebrew word, "
+            "English gloss, CEFR level A1-C1, confidence, and source."
         ),
         "document_kinds": "Hebrew vocabulary, English glosses, and CEFR A1-C1 levels",
         "mentor_prompt": (

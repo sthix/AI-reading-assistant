@@ -450,7 +450,6 @@ function App() {
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
   const editorRef = useRef(null);
-  const easierEditorRef = useRef(null);
   const pendingTranslationsRef = useRef(new Set());
 
   const sourceHebrewWords = useMemo(
@@ -471,7 +470,28 @@ function App() {
         : easierAnnotations,
     [easierAnnotations, language, sourceHebrewWords],
   );
-  const hasVisibleEasierText = visibleEasierText.trim() !== "";
+  const displayEasierText = useMemo(() => {
+    if (language !== "japanese") return visibleEasierText;
+
+    const japaneseInlinePattern = /([\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤。、！？「」『』（）［］【】・…])\s+([\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤。、！？「」『』（）［］【】・…])/g;
+    let normalized = visibleEasierText;
+    while (true) {
+      const compacted = normalized.replace(japaneseInlinePattern, "$1$2");
+      if (compacted === normalized) break;
+      normalized = compacted;
+    }
+
+    return normalized.trim();
+  }, [language, visibleEasierText]);
+  const hasVisibleEasierText = displayEasierText.trim() !== "";
+  const easierRenderedTokens = getRenderedTokenData(
+    visibleEasierAnnotations.length > 0
+      ? visibleEasierAnnotations
+      : displayEasierText
+        ? [{ text: displayEasierText }]
+        : [],
+    { compactJapaneseWhitespace: true },
+  );
   const hasCompletedEasierVersion =
     activeTextTab === "easier" &&
     !isSimplifying &&
@@ -479,12 +499,10 @@ function App() {
     (language === "hebrew" || easierAnnotations.length > 0);
   const activeText = useMemo(
     () =>
-      language === "hebrew" && activeTextTab === "easier"
-        ? visibleEasierText
-        : hasCompletedEasierVersion
-          ? visibleEasierText
-          : text,
-    [activeTextTab, hasCompletedEasierVersion, language, text, visibleEasierText],
+      activeTextTab === "easier" && hasVisibleEasierText
+        ? displayEasierText
+        : text,
+    [activeTextTab, displayEasierText, hasVisibleEasierText, text],
   );
   const activeAnnotations = useMemo(
     () =>
@@ -528,34 +546,6 @@ function App() {
   const sourceNeedsTokenization = sourcePattern.test(text) && annotations.length === 0;
   const isSourceTokenized =
     text.trim() !== "" && !isAnnotating && !sourceNeedsTokenization;
-  const listedTokens = useMemo(() => {
-    const seen = new Set();
-    return activeAnnotations
-      .filter((token) => canLookupToken(token, language))
-      .map((token) => {
-        const level =
-          language === "hebrew"
-            ? token.cefr_level
-            : token.jlpt_level
-              ? `N${token.jlpt_level}`
-              : null;
-        if (!level) return null;
-        const key = `${token.text}-${level}-${token.english_gloss ?? token.reading ?? ""}`;
-        if (seen.has(key)) return null;
-        seen.add(key);
-        return {
-          word: token.text,
-          level,
-          detail:
-            language === "hebrew"
-              ? token.english_gloss
-              : token.reading || token.base_form,
-        };
-      })
-      .filter(Boolean);
-  }, [activeAnnotations, language]);
-  const showWordList = language !== "hebrew";
-
   function resetForLanguage(nextLanguage) {
     setLanguage(nextLanguage);
     setText("");
@@ -709,12 +699,8 @@ function App() {
     setText(event.currentTarget.innerText);
   }
 
-  function renderAnnotatedText(editor, tokenList, fallbackText) {
-    if (!editor) return;
-
-    editor.replaceChildren();
-    const tokens = tokenList.length > 0 ? tokenList : fallbackText ? [{ text: fallbackText }] : [];
-
+  function getRenderedTokenData(tokens, options = {}) {
+    const renderedTokens = [];
     let previousHebrewSeparator = false;
 
     tokens.forEach((token, index) => {
@@ -722,40 +708,56 @@ function App() {
       const hasLevel = Boolean(level);
       const canLookup = canLookupToken(token, language);
       const isHebrewSeparator = language === "hebrew" && !canLookup;
+      const tokenText =
+        options.compactJapaneseWhitespace && language === "japanese"
+          ? token.text.replace(/\s+/g, "")
+          : token.text;
+
+      if (!tokenText) return;
       if (isHebrewSeparator && previousHebrewSeparator) return;
       previousHebrewSeparator = isHebrewSeparator;
       if (!isHebrewSeparator) previousHebrewSeparator = false;
+
+      renderedTokens.push({
+        className: hasLevel
+          ? `annotated-token ${config.classForLevel(level)}`
+          : canLookup
+            ? "lookup-token"
+            : "plain-token",
+        canLookup,
+        index,
+        text: isHebrewSeparator ? getHebrewSeparatorText(tokenText) : tokenText,
+      });
+    });
+
+    return renderedTokens;
+  }
+
+  function renderAnnotatedText(editor, tokenList, fallbackText, options = {}) {
+    if (!editor) return;
+
+    editor.replaceChildren();
+    const tokens = tokenList.length > 0 ? tokenList : fallbackText ? [{ text: fallbackText }] : [];
+
+    getRenderedTokenData(tokens, options).forEach((token) => {
       const span = document.createElement("span");
-      span.textContent = isHebrewSeparator ? getHebrewSeparatorText(token.text) : token.text;
-      span.className = hasLevel
-        ? `annotated-token ${config.classForLevel(level)}`
-        : canLookup
-          ? "lookup-token"
-          : "plain-token";
-      if (canLookup) {
+      span.textContent = token.text;
+      span.className = token.className;
+      if (token.canLookup) {
         span.tabIndex = 0;
-        span.dataset.tokenIndex = String(index);
+        span.dataset.tokenIndex = String(token.index);
       }
       editor.appendChild(span);
     });
   }
 
   useEffect(() => {
-    if (language === "hebrew" && activeTextTab === "easier") {
+    if (activeTextTab !== "source") {
       editorRef.current?.replaceChildren();
       return;
     }
     renderAnnotatedText(editorRef.current, annotations, text);
   }, [activeTextTab, annotations, text, language]);
-
-  useEffect(() => {
-    if (language === "hebrew") {
-      easierEditorRef.current?.replaceChildren();
-      return;
-    }
-    if (isSimplifying) return;
-    renderAnnotatedText(easierEditorRef.current, visibleEasierAnnotations, visibleEasierText);
-  }, [activeTextTab, visibleEasierAnnotations, visibleEasierText, isSimplifying, language]);
 
   function handleEditorPointer(event) {
     const tokenElement = event.target.closest?.("[data-token-index]");
@@ -890,7 +892,6 @@ function App() {
   function handleTextTabChange(tab) {
     if (language === "hebrew" && tab === "easier") {
       editorRef.current?.replaceChildren();
-      easierEditorRef.current?.replaceChildren();
     }
     setActiveTextTab(tab);
     setActiveTooltip(null);
@@ -1120,7 +1121,7 @@ function App() {
           </div>
 
           {activeTextTab === "source" ? (
-            <div className="editor-frame">
+            <div className="editor-frame" key="source-editor">
               <div
                 ref={editorRef}
                 className="study-editor"
@@ -1141,7 +1142,7 @@ function App() {
               />
             </div>
           ) : (
-            <div className="easier-pane">
+            <div className="easier-pane" key="easier-pane">
               <div className="easier-controls">
                 <label htmlFor="target-level">Target difficulty</label>
                 <select
@@ -1172,29 +1173,22 @@ function App() {
                 </button>
               </div>
 
-              {!hasVisibleEasierText ? (
-                <div className="easier-output empty-output" dir={config.dir} lang={config.lang}>
-                  <p className="empty-state">
-                    {pendingSimplifyLevel
-                      ? "Tokenizing the source text first…"
-                      : isSimplifying
-                        ? `Starting a ${targetLevel} version…`
-                        : language === "hebrew" && easierText.trim()
-                          ? "No new Hebrew words outside the source text were generated."
-                          : text.trim()
-                            ? "Choose a target level, then click Generate to create a simpler version."
-                            : "Paste source text, then use this tab to generate a simpler version."}
-                  </p>
-                </div>
-              ) : language === "hebrew" || isSimplifying ? (
+              {(pendingSimplifyLevel || isSimplifying) && (
+                <p className="easier-note">
+                  {pendingSimplifyLevel
+                    ? "Tokenizing the source text first…"
+                    : `Starting a ${targetLevel} version…`}
+                </p>
+              )}
+              {hasVisibleEasierText && isSimplifying && (
                 <div className="easier-output empty-output streaming-output" dir={config.dir} lang={config.lang}>
-                  <p>{visibleEasierText}</p>
+                  <p>{displayEasierText}</p>
                 </div>
-              ) : (
+              )}
+              {hasVisibleEasierText && !isSimplifying && (
                 <div className="editor-frame easier-output" dir={config.dir} lang={config.lang}>
-                  <div
-                    ref={easierEditorRef}
-                    className="study-editor"
+                  <p
+                    className="generated-reader"
                     dir={config.dir}
                     lang={config.lang}
                     onBlur={() => setActiveTooltip(null)}
@@ -1203,7 +1197,19 @@ function App() {
                     onMouseLeave={() => setActiveTooltip(null)}
                     onMouseMove={handleEditorPointer}
                     role="document"
-                  />
+                  >
+                    {easierRenderedTokens.map((token) => {
+                      const tokenProps = {
+                        className: token.className,
+                        key: `${token.index}-${token.text}`,
+                      };
+                      if (token.canLookup) {
+                        tokenProps["data-token-index"] = token.index;
+                        tokenProps.tabIndex = 0;
+                      }
+                      return <span {...tokenProps}>{token.text}</span>;
+                    })}
+                  </p>
                 </div>
               )}
               {easierText && easierTextSource !== normalizeSourceForLanguage(text, language) && (
@@ -1249,32 +1255,6 @@ function App() {
             <p className="eyebrow">Ledger</p>
             <h2>Difficulty map</h2>
           </div>
-
-          {showWordList && (
-            <section className="word-list" aria-label={`${config.scaleLabel} words found`}>
-              <div className="chart-header">
-                <span>{config.scaleLabel} words found</span>
-                <strong>{listedTokens.length}</strong>
-              </div>
-              {listedTokens.length > 0 ? (
-                <div className="word-list-items">
-                  {listedTokens.slice(0, 14).map((token) => (
-                    <div className="word-list-row" key={`${token.word}-${token.level}-${token.detail ?? ""}`}>
-                      <span className={`word-list-level ${config.classForLevel(token.level)}`}>
-                        {token.level}
-                      </span>
-                      <strong dir={config.dir}>{token.word}</strong>
-                      {token.detail && <small>{token.detail}</small>}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="word-list-empty">
-                  No {config.scaleLabel} list words found in the current text yet.
-                </p>
-              )}
-            </section>
-          )}
 
           <section
             className="difficulty-card"

@@ -365,19 +365,46 @@
     unicode-bidi: plaintext;
 }
 
-.hebrew-mode .text-panel[data-active-tab="easier"] .editor-frame,
-.hebrew-mode .text-panel[data-active-tab="easier"] .study-editor,
-.hebrew-mode .text-panel[data-active-tab="easier"] .annotated-token,
-.hebrew-mode .text-panel[data-active-tab="easier"] .lookup-token,
-.hebrew-mode .text-panel[data-active-tab="easier"] .plain-token {
-    display: none !important;
-}
-
 .japanese-mode .study-editor,
 .japanese-mode .streaming-output {
     direction: ltr;
     font-family: "Yu Mincho", "Hiragino Mincho ProN", Georgia, serif;
     text-align: left;
+}
+
+.generated-reader {
+    box-sizing: border-box;
+    max-width: calc(var(--ideal-reading-width) + (var(--reader-padding) * 2));
+    min-height: 100%;
+    margin: 0;
+    color: var(--ink);
+    font-family: "Noto Serif Hebrew", "Times New Roman", Georgia, serif;
+    font-size: 1.18rem;
+    line-height: 2.05;
+    padding: var(--reader-padding);
+    white-space: normal !important;
+    writing-mode: horizontal-tb !important;
+}
+
+.hebrew-mode .generated-reader {
+    max-width: none;
+    direction: rtl;
+    text-align: right;
+    unicode-bidi: plaintext;
+}
+
+.japanese-mode .generated-reader {
+    direction: ltr;
+    font-family: "Yu Mincho", "Hiragino Mincho ProN", Georgia, serif;
+    text-align: left;
+}
+
+.generated-reader .annotated-token,
+.generated-reader .lookup-token,
+.generated-reader .plain-token {
+    display: inline !important;
+    white-space: normal !important;
+    writing-mode: horizontal-tb !important;
 }
 
 .editor-frame:focus-within {
