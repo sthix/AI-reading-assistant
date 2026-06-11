@@ -87,17 +87,17 @@ def get_retriever(language: Language):
     doc_splits = text_splitter.split_documents(docs_list)
 
     persist_directory = str(LANGUAGE_CONFIG[language]["persist_directory"])
-    if os.path.exists(persist_directory) and os.listdir(persist_directory):
-        vectorstore = Chroma(
-            persist_directory=persist_directory,
-            embedding_function=embedding_model,
-        )
-    else:
-        vectorstore = Chroma.from_documents(
-            documents=doc_splits,
-            embedding=embedding_model,
-            persist_directory=persist_directory,
-        )
+    rebuild = not (os.path.exists(persist_directory) and os.listdir(persist_directory))
+    vectorstore = Chroma(
+        persist_directory=persist_directory,
+        embedding_function=embedding_model,
+    )
+    if rebuild:
+        # Ollama's embedding runner dies on a single oversized embed request,
+        # so the full dataset has to be inserted in batches.
+        batch_size = 200
+        for start in range(0, len(doc_splits), batch_size):
+            vectorstore.add_documents(doc_splits[start : start + batch_size])
 
     return vectorstore.as_retriever(search_kwargs={"k": 6})
 
