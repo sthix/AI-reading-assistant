@@ -46,7 +46,7 @@ const languageConfigs = {
     scaleLabel: "CEFR",
     listedLabel: "CEFR / listed Hebrew words",
     levels: ["A1", "A2", "B1", "B2", "C1"],
-    chartLevels: ["C1", "B2", "B1", "A2", "A1"],
+    chartLevels: ["A1", "A2", "B1", "B2", "C1"],
     targetLevels: ["A1", "A2", "B1", "B2", "C1"],
     defaultTarget: "B1",
     classForLevel: (level) => `cefr-${level.toLowerCase()}`,
