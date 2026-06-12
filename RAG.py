@@ -119,10 +119,10 @@ def build_graph(language: Language):
     retriever_tool = retrieve_language_info
 
     response_model = init_chat_model(
-        "kimi-k2.6:cloud", model_provider="ollama", temperature=0
+        "gemma4:31b-cloud", model_provider="ollama", temperature=0
     )
     grader_model = init_chat_model(
-        "kimi-k2.6:cloud", model_provider="ollama", temperature=0
+        "gemma4:31b-cloud", model_provider="ollama", temperature=0
     )
 
     def generate_query_or_respond(state: MessagesState):
@@ -157,7 +157,9 @@ def build_graph(language: Language):
         "\n ------- \n"
         "{question}"
         "\n ------- \n"
-        f"{config['rewrite_prompt']}"
+        f"{config['rewrite_prompt']}\n"
+        "Return only the single improved question, with no explanations, "
+        "options, or extra text."
     )
 
     def rewrite_question(state: MessagesState):

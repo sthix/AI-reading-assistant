@@ -639,7 +639,7 @@ def stream_simplified_text(source_text: str, target_level: str, language: Langua
     ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
     payload = json.dumps(
         {
-            "model": "kimi-k2.6:cloud",
+            "model": "gemma4:31b-cloud",
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
             "think": False,

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./App.css";
 
 const API_BASE_URL =
@@ -54,9 +56,7 @@ const languageConfigs = {
 const japaneseWordPattern = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaffー々〆〤]/;
 const japanesePunctuationPattern = /^[。、！？「」『』（）［］【】・…ー\s]+$/;
 const hebrewWordPattern = /[\u0590-\u05ff]/;
-const hebrewRunPattern = /[\u0590-\u05ff]+(?:[׳'״"-][\u0590-\u05ff]+)*/g;
 const hebrewPunctuationPattern = /^[.,!?;:()[\]{}\s־״׳'"-]+$/;
-const hebrewMarksPattern = /[\u0591-\u05bd\u05bf-\u05c7]/g;
 const hebrewBidiControlPattern = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 const hebrewTableRulePattern = /^\s*[|:;–—\s-]+\s*$/gm;
 
@@ -104,60 +104,6 @@ function getHebrewSeparatorText(value) {
 
   if (!cleaned.trim()) return " ";
   return hebrewPunctuationPattern.test(cleaned) ? cleaned : " ";
-}
-
-function normalizeHebrewWordForComparison(value) {
-  return value
-    .replace(hebrewMarksPattern, "")
-    .replace(/־/g, "-")
-    .trim();
-}
-
-function getHebrewComparisonKeys(value) {
-  const normalized = normalizeHebrewWordForComparison(value);
-  if (!normalized) return [];
-
-  const keys = new Set([normalized]);
-  let withoutPrefixes = normalized;
-  while (
-    withoutPrefixes.length > 2 &&
-    /^[ובהלכמש]/.test(withoutPrefixes)
-  ) {
-    withoutPrefixes = withoutPrefixes.slice(1);
-    if (withoutPrefixes.length > 1) keys.add(withoutPrefixes);
-  }
-  return [...keys];
-}
-
-function getHebrewWordSetFromText(value) {
-  const words = new Set();
-  Array.from(value.matchAll(hebrewRunPattern), ([word]) => {
-    getHebrewComparisonKeys(word).forEach((key) => words.add(key));
-  });
-  return words;
-}
-
-function isHebrewSourceWord(value, sourceWords) {
-  return getHebrewComparisonKeys(value).some((key) => sourceWords.has(key));
-}
-
-function filterHebrewSourceWordsFromText(value, sourceWords) {
-  if (sourceWords.size === 0) return normalizeSourceForLanguage(value, "hebrew");
-  return normalizeSourceForLanguage(
-    value.replace(hebrewRunPattern, (word) =>
-      isHebrewSourceWord(word, sourceWords) ? " " : word,
-    ),
-    "hebrew",
-  );
-}
-
-function filterHebrewSourceTokens(tokens, sourceWords) {
-  if (sourceWords.size === 0) return tokens;
-  return tokens.filter((token) => {
-    if (!canLookupToken(token, "hebrew")) return true;
-    const sourceCandidates = [token.text, token.base_form].filter(Boolean);
-    return !sourceCandidates.some((word) => isHebrewSourceWord(word, sourceWords));
-  });
 }
 
 function average(scores) {
@@ -452,24 +398,14 @@ function App() {
   const editorRef = useRef(null);
   const pendingTranslationsRef = useRef(new Set());
 
-  const sourceHebrewWords = useMemo(
-    () => (language === "hebrew" ? getHebrewWordSetFromText(text) : new Set()),
-    [text, language],
-  );
   const visibleEasierText = useMemo(
     () =>
       language === "hebrew"
-        ? filterHebrewSourceWordsFromText(easierText, sourceHebrewWords)
+        ? normalizeSourceForLanguage(easierText, "hebrew")
         : easierText,
-    [easierText, language, sourceHebrewWords],
+    [easierText, language],
   );
-  const visibleEasierAnnotations = useMemo(
-    () =>
-      language === "hebrew"
-        ? filterHebrewSourceTokens(easierAnnotations, sourceHebrewWords)
-        : easierAnnotations,
-    [easierAnnotations, language, sourceHebrewWords],
-  );
+  const visibleEasierAnnotations = easierAnnotations;
   const displayEasierText = useMemo(() => {
     if (language !== "japanese") return visibleEasierText;
 
@@ -1040,7 +976,15 @@ function App() {
                 <span className="message-role">
                   {message.role === "assistant" ? "Tutor" : "You"}
                 </span>
-                <p>{message.content}</p>
+                {message.role === "assistant" ? (
+                  <div className="message-content">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <p>{message.content}</p>
+                )}
               </article>
             ))}
             {isAnswering && (

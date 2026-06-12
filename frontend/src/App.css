@@ -247,6 +247,80 @@
     white-space: pre-wrap;
 }
 
+.message-content {
+    color: var(--ink);
+    line-height: 1.55;
+}
+
+.message-content p {
+    margin: 0 0 8px;
+    white-space: normal;
+}
+
+.message-content p:last-child,
+.message-content ul:last-child,
+.message-content ol:last-child {
+    margin-bottom: 0;
+}
+
+.message-content ul,
+.message-content ol {
+    margin: 0 0 8px;
+    padding-left: 20px;
+}
+
+.message-content li {
+    margin-bottom: 3px;
+}
+
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4 {
+    margin: 10px 0 6px;
+    font-size: 0.95rem;
+}
+
+.message-content code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(82, 104, 90, 0.12);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+}
+
+.message-content pre {
+    margin: 0 0 8px;
+    padding: 10px;
+    border-radius: 6px;
+    background: rgba(82, 104, 90, 0.1);
+    overflow-x: auto;
+}
+
+.message-content pre code {
+    padding: 0;
+    background: none;
+}
+
+.message-content blockquote {
+    margin: 0 0 8px;
+    padding-left: 10px;
+    border-left: 3px solid var(--hairline);
+    color: var(--sage);
+}
+
+.message-content table {
+    margin: 0 0 8px;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.message-content th,
+.message-content td {
+    padding: 4px 8px;
+    border: 1px solid var(--hairline);
+}
+
 .chat-form {
     display: grid;
     grid-template-columns: 1fr auto;
