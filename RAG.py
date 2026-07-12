@@ -100,12 +100,14 @@ def get_retriever(language: Language):
     doc_splits = text_splitter.split_documents(docs_list)
 
     persist_directory = str(LANGUAGE_CONFIG[language]["persist_directory"])
-    rebuild = not (os.path.exists(persist_directory) and os.listdir(persist_directory))
     vectorstore = Chroma(
         persist_directory=persist_directory,
         embedding_function=embedding_model,
     )
-    if rebuild:
+    # A leftover chroma.sqlite3 without vector segments used to pass a
+    # directory-not-empty check while the collection held zero documents,
+    # so count the stored embeddings instead of listing files.
+    if vectorstore._collection.count() == 0:
         # Ollama's embedding runner dies on a single oversized embed request,
         # so the full dataset has to be inserted in batches.
         batch_size = 200
@@ -165,6 +167,15 @@ def build_graph(language: Language, provider: Provider = "ollama"):
     ) -> Literal["generate_answer", "rewrite_question"]:
         question = state["messages"][0].content
         context = state["messages"][-1].content
+        # Each rewrite appends a HumanMessage after the original question.
+        # Allow a single rewrite, then answer with the best context we have:
+        # every extra loop costs 3-4 sequential LLM calls, and an unbounded
+        # loop kept chat requests spinning until the recursion limit.
+        rewrite_count = sum(
+            isinstance(message, HumanMessage) for message in state["messages"]
+        ) - 1
+        if rewrite_count >= 1:
+            return "generate_answer"
         prompt = grade_prompt.format(question=question, context=context)
         response = grader_model.invoke([{"role": "user", "content": prompt}])
         score = response.content.strip().lower()
