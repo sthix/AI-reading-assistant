@@ -114,6 +114,19 @@
     color: #fffaf0;
 }
 
+.chat-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.segmented-control-compact button {
+    padding: 4px 9px;
+    font-size: 0.82rem;
+}
+
 .info-strip {
     margin: -4px 0 16px;
     border: 1px solid rgba(82, 104, 90, 0.28);

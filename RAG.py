@@ -17,6 +17,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 dotenv.load_dotenv()
 
 Language = Literal["japanese", "hebrew"]
+Provider = Literal["ollama", "groq"]
 
 BASE_DIR = Path(__file__).parent
 DOCUMENTS_DIR = BASE_DIR / "documents"
@@ -63,7 +64,17 @@ LANGUAGE_CONFIG: dict[str, dict[str, object]] = {
     },
 }
 
+# Embeddings always stay on Ollama: the persisted Chroma stores were built with
+# embeddinggemma vectors, so swapping the chat provider must not touch retrieval.
 embedding_model = OllamaEmbeddings(model="embeddinggemma")
+
+PROVIDER_MODELS: dict[str, dict[str, str]] = {
+    "ollama": {"model": "gemma4:31b-cloud", "model_provider": "ollama"},
+    "groq": {
+        "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        "model_provider": "groq",
+    },
+}
 
 
 def load_csv_documents(language: Language):
@@ -73,7 +84,9 @@ def load_csv_documents(language: Language):
     for path in paths:  # type: ignore[assignment]
         document_path = Path(path)
         if not document_path.exists():
-            raise FileNotFoundError(f"Missing {config['label']} RAG document: {document_path}")
+            raise FileNotFoundError(
+                f"Missing {config['label']} RAG document: {document_path}"
+            )
         docs.extend(CSVLoader(document_path).load())
     return docs
 
@@ -102,11 +115,23 @@ def get_retriever(language: Language):
     return vectorstore.as_retriever(search_kwargs={"k": 6})
 
 
-@lru_cache(maxsize=2)
-def build_graph(language: Language):
+def build_mentor_prompt(language: Language, question: str, context: str) -> str:
+    config = LANGUAGE_CONFIG[language]
+    return (
+        f"{config['mentor_prompt']} "
+        "If you don't know the answer from the context, say that you don't know. "
+        "Use three sentences maximum and keep the answer concise.\n"
+        f"Question: {question}\n"
+        f"Context: {context}"
+    )
+
+
+@lru_cache(maxsize=4)
+def build_graph(language: Language, provider: Provider = "ollama"):
     """Compile a LangGraph RAG workflow for Japanese or Hebrew."""
     config = LANGUAGE_CONFIG[language]
     retriever = get_retriever(language)
+    model_config = PROVIDER_MODELS[provider]
 
     @tool
     def retrieve_language_info(query: str) -> str:
@@ -118,12 +143,8 @@ def build_graph(language: Language):
     retrieve_language_info.description = str(config["tool_description"])
     retriever_tool = retrieve_language_info
 
-    response_model = init_chat_model(
-        "gemma4:31b-cloud", model_provider="ollama", temperature=0
-    )
-    grader_model = init_chat_model(
-        "gemma4:31b-cloud", model_provider="ollama", temperature=0
-    )
+    response_model = init_chat_model(temperature=0.2, **model_config)
+    grader_model = init_chat_model(temperature=0, **model_config)
 
     def generate_query_or_respond(state: MessagesState):
         response = response_model.bind_tools([retriever_tool]).invoke(state["messages"])
@@ -168,18 +189,10 @@ def build_graph(language: Language):
         response = response_model.invoke([{"role": "user", "content": prompt}])
         return {"messages": [HumanMessage(content=response.content)]}
 
-    generate_prompt = (
-        f"{config['mentor_prompt']} "
-        "If you don't know the answer from the context, say that you don't know. "
-        "Use three sentences maximum and keep the answer concise.\n"
-        "Question: {question}\n"
-        "Context: {context}"
-    )
-
     def generate_answer(state: MessagesState):
         question = state["messages"][0].content
         context = state["messages"][-1].content
-        prompt = generate_prompt.format(question=question, context=context)
+        prompt = build_mentor_prompt(language, question, context)
         response = response_model.invoke([{"role": "user", "content": prompt}])
         return {"messages": [response]}
 
@@ -210,7 +223,9 @@ graph = graph_japanese
 if __name__ == "__main__":
     question = "What is the meaning of שלום, and what is its CEFR level?"
     print(f"Question: {question}\n")
-    for chunk in graph_hebrew.stream({"messages": [{"role": "user", "content": question}]}):
+    for chunk in graph_hebrew.stream(
+        {"messages": [{"role": "user", "content": question}]}
+    ):
         for node, update in chunk.items():
             print(f"--- Update from node: {node} ---")
             update["messages"][-1].pretty_print()

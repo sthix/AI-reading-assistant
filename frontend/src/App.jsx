@@ -378,6 +378,7 @@ function App() {
   const [text, setText] = useState("");
   const [messages, setMessages] = useState(getInitialMessages(language));
   const [chatInput, setChatInput] = useState("");
+  const [chatProvider, setChatProvider] = useState("ollama");
   const [uploadedFileName, setUploadedFileName] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [isAnswering, setIsAnswering] = useState(false);
@@ -858,7 +859,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, language }),
+        body: JSON.stringify({ message, language, provider: chatProvider }),
       });
 
       const data = await response.json();
@@ -962,9 +963,30 @@ function App() {
               <p className="eyebrow">Margin notes</p>
               <h2>{config.tutorTitle}</h2>
             </div>
-            <button className="ghost-button" type="button" onClick={clearChat}>
-              Clear
-            </button>
+            <div className="chat-header-actions">
+              <div
+                className="segmented-control segmented-control-compact"
+                aria-label="Chat model"
+              >
+                {[
+                  ["ollama", "Local"],
+                  ["groq", "Groq"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={chatProvider === key ? "is-active" : ""}
+                    type="button"
+                    onClick={() => setChatProvider(key)}
+                    aria-pressed={chatProvider === key}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button className="ghost-button" type="button" onClick={clearChat}>
+                Clear
+              </button>
+            </div>
           </div>
 
           <div className="messages" aria-live="polite">

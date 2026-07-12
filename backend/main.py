@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+import dotenv
 from langchain.chat_models import init_chat_model
 from sudachipy import dictionary as sudachi_dictionary
 from sudachipy import tokenizer as sudachi_tokenizer
@@ -20,12 +21,16 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 
+dotenv.load_dotenv(Path(__file__).parent.parent / ".env")
+
 Language = Literal["japanese", "hebrew"]
+Provider = Literal["ollama", "groq"]
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     language: Language = "japanese"
+    provider: Provider = "ollama"
 
 
 class ChatResponse(BaseModel):
@@ -96,12 +101,12 @@ class UploadResponse(BaseModel):
     stats: StatsResponse
 
 
-@lru_cache(maxsize=2)
-def get_rag_graph(language: Language):
-    """Import and cache the compiled RAG graph for the selected language."""
-    from RAG import graph_hebrew, graph_japanese
+@lru_cache(maxsize=4)
+def get_rag_graph(language: Language, provider: Provider = "ollama"):
+    """Import and cache the compiled RAG graph for the language and chat provider."""
+    from RAG import build_graph
 
-    return graph_hebrew if language == "hebrew" else graph_japanese
+    return build_graph(language, provider)
 
 
 @lru_cache(maxsize=1)
@@ -697,9 +702,14 @@ async def chat(request: ChatRequest):
     message = request.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message must not be empty.")
+    if request.provider == "groq" and not os.getenv("GROQ_API_KEY"):
+        raise HTTPException(
+            status_code=400,
+            detail="Groq mode needs a GROQ_API_KEY in the project .env file.",
+        )
 
     def invoke_rag() -> str:
-        graph = get_rag_graph(request.language)
+        graph = get_rag_graph(request.language, request.provider)
         result = graph.invoke({"messages": [{"role": "user", "content": message}]})
         return result["messages"][-1].content
 
