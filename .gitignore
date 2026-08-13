@@ -4,3 +4,6 @@ frontend/dist/
 __pycache__/
 *.pyc
 .gstack/
+.env
+.env.*
+!.env.example
