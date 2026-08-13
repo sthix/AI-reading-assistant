@@ -9,3 +9,5 @@ __pycache__/
 !.env.example
 .DS_Store
 .logs/
+# Chroma vector stores are rebuilt from documents/ on first run (see RAG.py)
+chroma_db*/
