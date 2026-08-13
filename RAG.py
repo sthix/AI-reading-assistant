@@ -81,7 +81,7 @@ def load_csv_documents(language: Language):
     config = LANGUAGE_CONFIG[language]
     paths = config["document_paths"]
     docs = []
-    for path in paths:  # type: ignore[assignment]
+    for path in paths:  
         document_path = Path(path)
         if not document_path.exists():
             raise FileNotFoundError(
